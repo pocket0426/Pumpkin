@@ -105,3 +105,39 @@ pub(super) async fn test_sponge_absorbs_water(helper: GameTestHelper) -> GameTes
     helper.succeed();
     Ok(())
 }
+
+pub(super) async fn test_water_source_forms_next_to_kelp(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 3).await?;
+    // A one block wide channel: stone, water source, gap, kelp, stone.
+    for x in 0..5 {
+        for z in 0..3 {
+            if z != 1 || x == 0 || x == 4 {
+                helper
+                    .set_block_default(&BlockPos::new(x, 1, z), &Block::STONE)
+                    .await?;
+            }
+        }
+    }
+    let gap = BlockPos::new(2, 1, 1);
+    helper
+        .set_block_default(&BlockPos::new(3, 1, 1), &Block::KELP)
+        .await?;
+    helper
+        .set_block_default(&BlockPos::new(1, 1, 1), &Block::WATER)
+        .await?;
+
+    // Kelp holds a water source, so the gap has two source neighbours and turns into one itself.
+    helper
+        .start_sequence()
+        .then_idle(15)
+        .then_execute(move |helper| async move {
+            helper.assert_true(
+                helper.block_state_id(&gap).await == Block::WATER.default_state.id,
+                "Expected the gap between a water source and kelp to become a water source",
+            )
+        })
+        .then_succeed();
+    Ok(())
+}

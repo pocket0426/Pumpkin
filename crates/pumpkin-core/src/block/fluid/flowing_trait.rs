@@ -64,14 +64,9 @@ pub trait FlowingFluid: Send + Sync {
         if let Some(props) = FlowingFluidProperties::from_state_id(state_id, fluid) {
             return Some(props);
         }
-        // TODO: vanilla reads `getFluidState()`, so kelp, seagrass and bubble columns are water sources too.
-        if fluid.matches_type(&Fluid::WATER) {
-            let block = Block::from_state_id(state_id);
-            if block.is_waterlogged(state_id) {
-                return Some(self.get_source(false));
-            }
-        }
-        None
+        // Vanilla `getFluidState()`: waterlogged blocks, kelp, seagrass and bubble columns hold a water source.
+        (fluid.matches_type(&Fluid::WATER) && state_id.to_state().is_liquid())
+            .then(|| self.get_source(false))
     }
 
     /// Core fluid tick handler that updates fluid state and triggers spreading.

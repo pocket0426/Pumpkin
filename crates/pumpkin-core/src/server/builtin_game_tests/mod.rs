@@ -66,6 +66,7 @@ const BUILTIN_TEST_IDS: &[&str] = &[
     "pumpkin:doors_trapdoors_fence_gates_redstone",
     "pumpkin:water_lava_interactions",
     "pumpkin:sponge_absorbs_water",
+    "pumpkin:water_source_forms_next_to_kelp",
     "pumpkin:bubble_column_upward_and_downward",
     "pumpkin:falling_sand_lands",
     "pumpkin:scaffolding_distance_and_collapse",
@@ -430,6 +431,13 @@ pub fn ensure_builtin_game_tests_registered() {
             20,
             0,
             fluids_and_sponge::test_sponge_absorbs_water,
+        );
+        register_function_test(
+            "pumpkin:water_source_forms_next_to_kelp",
+            "pumpkin:empty_5x4x5",
+            30,
+            0,
+            fluids_and_sponge::test_water_source_forms_next_to_kelp,
         );
         register_function_test(
             "pumpkin:bubble_column_upward_and_downward",
