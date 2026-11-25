@@ -1,3 +1,4 @@
+mod bed_villager;
 mod block_tuning_and_invert;
 mod commands_and_gamemode;
 mod embedded_stop;
@@ -41,6 +42,7 @@ pub async fn run_bot_tests(
 
     sheep_shearing::run_sheep_shearing_test(server, summary_lines)?;
     snow_golem::run_snow_golem_shearing_test(server, summary_lines)?;
+    bed_villager::run_bed_kicks_sleeping_villager_test(server, summary_lines)?;
 
     polar_bear::run_polar_bear_defense_test(server, &bot1, summary_lines)?;
 
