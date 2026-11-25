@@ -12,7 +12,17 @@ use std::{array::from_fn, sync::Arc};
 use crate::block::entities::BlockEntity;
 use crate::block::viewer::{ViewerCountListener, ViewerCountTracker, ViewerCountTrackerExt};
 use crate::world::World;
+use crossbeam::atomic::AtomicCell;
 use pumpkin_inventory::{Clearable, Inventory, sync_write_items_to_nbt};
+
+/// Vanilla `ShulkerBoxBlockEntity.AnimationStatus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimationStatus {
+    Closed,
+    Opening,
+    Opened,
+    Closing,
+}
 
 pub struct ShulkerBoxBlockEntity {
     pub position: BlockPos,
@@ -23,6 +33,9 @@ pub struct ShulkerBoxBlockEntity {
     // Viewer
     pub viewers: ViewerCountTracker,
     pub metadata: super::ContainerMetadata,
+
+    animation_status: AtomicCell<AnimationStatus>,
+    progress: AtomicCell<f32>,
 }
 
 impl BlockEntity for ShulkerBoxBlockEntity {
@@ -45,6 +58,8 @@ impl BlockEntity for ShulkerBoxBlockEntity {
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
             metadata: super::ContainerMetadata::from_nbt(nbt),
+            animation_status: AtomicCell::new(AnimationStatus::Closed),
+            progress: AtomicCell::new(0.0),
         };
 
         pumpkin_inventory::sync_read_items_from_nbt(
@@ -66,6 +81,7 @@ impl BlockEntity for ShulkerBoxBlockEntity {
     fn tick(&self, world: &Arc<World>) {
         self.viewers
             .update_viewer_count::<Self>(self, world, &self.position);
+        self.update_animation();
     }
 
     fn on_block_replaced(self: Arc<Self>, _world: &Arc<World>, _position: &BlockPos) {
@@ -189,6 +205,7 @@ impl ViewerCountListener for ShulkerBoxBlockEntity {
 impl ShulkerBoxBlockEntity {
     pub const INVENTORY_SIZE: usize = 27;
     pub const OPEN_ANIMATION_EVENT_TYPE: u8 = 1;
+    const LID_PROGRESS_PER_TICK: f32 = 0.1;
     pub const ID: &'static str = "minecraft:shulker_box";
 
     #[must_use]
@@ -200,6 +217,54 @@ impl ShulkerBoxBlockEntity {
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
             metadata: super::ContainerMetadata::default(),
+            animation_status: AtomicCell::new(AnimationStatus::Closed),
+            progress: AtomicCell::new(0.0),
+        }
+    }
+
+    #[must_use]
+    pub fn animation_status(&self) -> AnimationStatus {
+        self.animation_status.load()
+    }
+
+    /// Vanilla `triggerEvent`: the open count arrives as a block event and drives the lid.
+    pub fn trigger_event(&self, r#type: u8, data: u8) -> bool {
+        if r#type != Self::OPEN_ANIMATION_EVENT_TYPE {
+            return false;
+        }
+        if data == 0 {
+            self.animation_status.store(AnimationStatus::Closing);
+        }
+        if data == 1 {
+            self.animation_status.store(AnimationStatus::Opening);
+        }
+        true
+    }
+
+    // TODO vanilla `updateAnimation` also runs `doNeighborUpdates` when the lid starts or finishes moving
+    // and `moveCollidedEntities` while it opens.
+    fn update_animation(&self) {
+        match self.animation_status.load() {
+            AnimationStatus::Closed => self.progress.store(0.0),
+            AnimationStatus::Opening => {
+                let progress = self.progress.load() + Self::LID_PROGRESS_PER_TICK;
+                if progress >= 1.0 {
+                    self.animation_status.store(AnimationStatus::Opened);
+                    self.progress.store(1.0);
+                } else {
+                    self.progress.store(progress);
+                }
+            }
+            AnimationStatus::Closing => {
+                let progress = self.progress.load() - Self::LID_PROGRESS_PER_TICK;
+                if progress <= 0.0 {
+                    self.animation_status.store(AnimationStatus::Closed);
+                    self.progress.store(0.0);
+                } else {
+                    self.progress.store(progress);
+                }
+            }
+            AnimationStatus::Opened => self.progress.store(1.0),
         }
     }
 
@@ -351,5 +416,33 @@ mod tests {
         assert_eq!(nbt.get_byte("facing"), Some(1));
         assert_eq!(nbt.get_bool("isMovable"), Some(false));
         assert_eq!(nbt.get_string("CustomName"), Some("Box"));
+    }
+
+    #[test]
+    fn lid_opens_over_ten_ticks_and_closes_again() {
+        let shulker_box = ShulkerBoxBlockEntity::new(BlockPos::new(0, 64, 0));
+        assert_eq!(shulker_box.animation_status(), AnimationStatus::Closed);
+
+        assert!(shulker_box.trigger_event(ShulkerBoxBlockEntity::OPEN_ANIMATION_EVENT_TYPE, 1));
+        for _ in 0..9 {
+            shulker_box.update_animation();
+        }
+        assert_eq!(shulker_box.animation_status(), AnimationStatus::Opening);
+        shulker_box.update_animation();
+        assert_eq!(shulker_box.animation_status(), AnimationStatus::Opened);
+
+        // A second viewer leaves the lid as it is.
+        assert!(shulker_box.trigger_event(ShulkerBoxBlockEntity::OPEN_ANIMATION_EVENT_TYPE, 2));
+        assert_eq!(shulker_box.animation_status(), AnimationStatus::Opened);
+
+        assert!(shulker_box.trigger_event(ShulkerBoxBlockEntity::OPEN_ANIMATION_EVENT_TYPE, 0));
+        assert_eq!(shulker_box.animation_status(), AnimationStatus::Closing);
+        for _ in 0..11 {
+            shulker_box.update_animation();
+        }
+        assert_eq!(shulker_box.animation_status(), AnimationStatus::Closed);
+
+        assert!(!shulker_box.trigger_event(0, 1));
+        assert_eq!(shulker_box.animation_status(), AnimationStatus::Closed);
     }
 }

@@ -101,6 +101,30 @@ impl BoundingBox {
         }
     }
 
+    /// Shrinks the bounding box along each axis, the opposite of [`Self::expand_towards`].
+    ///
+    /// A negative value pulls the minimum boundary in, a positive value the maximum boundary.
+    #[must_use]
+    pub fn contract(&self, x: f64, y: f64, z: f64) -> Self {
+        let mut contracted = *self;
+        if x < 0.0 {
+            contracted.min.x -= x;
+        } else if x > 0.0 {
+            contracted.max.x -= x;
+        }
+        if y < 0.0 {
+            contracted.min.y -= y;
+        } else if y > 0.0 {
+            contracted.max.y -= y;
+        }
+        if z < 0.0 {
+            contracted.min.z -= z;
+        } else if z > 0.0 {
+            contracted.max.z -= z;
+        }
+        contracted
+    }
+
     /// Returns the smallest box enclosing both boxes
     #[must_use]
     pub const fn minmax(&self, other: &Self) -> Self {

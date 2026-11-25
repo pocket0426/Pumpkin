@@ -10,8 +10,10 @@ use crate::block::{
     {BlockBehaviour, NormalUseArgs},
 };
 
-use crate::block::entities::shulker_box::ShulkerBoxBlockEntity;
+use crate::block::entities::shulker_box::{AnimationStatus, ShulkerBoxBlockEntity};
+use crate::entity::mob::shulker::ShulkerEntity;
 use pumpkin_data::BlockStateId;
+use pumpkin_data::FacingExt;
 use pumpkin_data::translation;
 use pumpkin_inventory::Inventory;
 use pumpkin_inventory::generic_container_screen_handler::create_generic_9x3;
@@ -58,9 +60,15 @@ impl BlockBehaviour for ShulkerBoxBlock {
     }
 
     fn on_synced_block_event(&self, args: OnSyncedBlockEventArgs<'_>) -> bool {
-        // On the server, we don't need the Animation steps for now, because the client is responsible for that.
-        // TODO: Do not open the shulker box when it is currently closing
-        args.r#type == Self::OPEN_ANIMATION_EVENT_TYPE
+        args.world
+            .get_block_entity(args.position)
+            .and_then(|block_entity| {
+                block_entity
+                    .as_any()
+                    .downcast_ref::<ShulkerBoxBlockEntity>()
+                    .map(|shulker_box| shulker_box.trigger_event(args.r#type, args.data))
+            })
+            .unwrap_or(false)
     }
 
     fn placed(&self, args: PlacedArgs<'_>) {
@@ -71,6 +79,9 @@ impl BlockBehaviour for ShulkerBoxBlock {
     }
 
     fn normal_use(&self, args: NormalUseArgs<'_>) -> BlockActionResult {
+        if !Self::can_open(&args) {
+            return BlockActionResult::Success;
+        }
         if let Some(factory) = self.get_screen_handler_factory(GetScreenHandlerFactoryArgs {
             server: args.server,
             world: args.world,
@@ -106,4 +117,35 @@ impl BlockBehaviour for ShulkerBoxBlock {
 
 impl ShulkerBoxBlock {
     pub const OPEN_ANIMATION_EVENT_TYPE: u8 = 1;
+
+    /// Vanilla `ShulkerBoxBlock.canOpen`: a closed box needs free space for its lid.
+    fn can_open(args: &NormalUseArgs<'_>) -> bool {
+        let Some(block_entity) = args.world.get_block_entity(args.position) else {
+            return false;
+        };
+        let Some(shulker_box) = block_entity
+            .as_any()
+            .downcast_ref::<ShulkerBoxBlockEntity>()
+        else {
+            return false;
+        };
+        if shulker_box.animation_status() != AnimationStatus::Closed {
+            return true;
+        }
+        let state_id = args.world.get_block_state_id(args.position);
+        let facing = EndRodLikeProperties::from_state_id(state_id).facing;
+        let lid_space = ShulkerEntity::progress_delta_aabb(
+            1.0,
+            facing.to_block_direction(),
+            0.0,
+            0.5,
+            args.position.to_f64(),
+        )
+        .contract_all(1.0E-6);
+        // Vanilla passes no source entity; ours only matters for a vehicle the player shares.
+        args.world.is_space_empty(lid_space)
+            && args
+                .world
+                .no_entity_collision(args.player.as_ref(), lid_space)
+    }
 }

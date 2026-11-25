@@ -9,6 +9,7 @@ use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::CEntityPositionSync;
+use pumpkin_util::math::boundingbox::BoundingBox;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 
@@ -62,6 +63,30 @@ pub struct ShulkerEntity {
 }
 
 impl ShulkerEntity {
+    /// Vanilla `Shulker.getProgressDeltaAabb`: the space the lid sweeps between two peek amounts.
+    #[must_use]
+    pub fn progress_delta_aabb(
+        size: f32,
+        direction: BlockDirection,
+        progress_to: f32,
+        progress_from: f32,
+        position: Vector3<f64>,
+    ) -> BoundingBox {
+        let size = f64::from(size);
+        let base = BoundingBox::new(
+            Vector3::new(-size * 0.5, 0.0, -size * 0.5),
+            Vector3::new(size * 0.5, size, size * 0.5),
+        );
+        let max_progress = f64::from(progress_to.max(progress_from));
+        let min_progress = f64::from(progress_to.min(progress_from));
+        let step = direction.to_offset().to_f64();
+        let expand = step * (max_progress * size);
+        let contract = step * (-(1.0 + min_progress) * size);
+        base.expand_towards(expand.x, expand.y, expand.z)
+            .contract(contract.x, contract.y, contract.z)
+            .shift(position)
+    }
+
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
         let shulker = Self {
@@ -542,5 +567,35 @@ impl BlockPosExt for BlockPos {
             self.0.y + offset.y,
             self.0.z + offset.z,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ShulkerEntity;
+    use pumpkin_data::BlockDirection;
+    use pumpkin_util::math::vector3::Vector3;
+
+    #[test]
+    fn progress_delta_aabb_is_the_half_block_in_front_of_the_lid() {
+        // The box `ShulkerBoxBlock.canOpen` checks, for a shulker box at 0, 64, 0.
+        let bottom_center = Vector3::new(0.5, 64.0, 0.5);
+        for (direction, min, max) in [
+            (BlockDirection::Up, [0.0, 65.0, 0.0], [1.0, 65.5, 1.0]),
+            (BlockDirection::Down, [0.0, 63.5, 0.0], [1.0, 64.0, 1.0]),
+            (BlockDirection::North, [0.0, 64.0, -0.5], [1.0, 65.0, 0.0]),
+            (BlockDirection::East, [1.0, 64.0, 0.0], [1.5, 65.0, 1.0]),
+        ] {
+            let lid_space =
+                ShulkerEntity::progress_delta_aabb(1.0, direction, 0.0, 0.5, bottom_center);
+            assert_eq!(
+                (
+                    [lid_space.min.x, lid_space.min.y, lid_space.min.z],
+                    [lid_space.max.x, lid_space.max.y, lid_space.max.z],
+                ),
+                (min, max),
+                "{direction:?}",
+            );
+        }
     }
 }
