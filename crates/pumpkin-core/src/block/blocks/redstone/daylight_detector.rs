@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::block::entities::daylight_detector::DaylightDetectorBlockEntity;
+use pumpkin_data::Block;
 use pumpkin_data::game_event::GameEvent;
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::{cos, position::BlockPos};
@@ -90,6 +91,11 @@ impl DaylightDetectorBlock {
 
     pub fn update_signal_strength(world: &Arc<World>, block_pos: &BlockPos) {
         let (block, state) = world.get_block_and_state(block_pos);
+        // Vanilla skips a block entity tick once the block at its position no longer matches its type.
+        // The tick loop works from a snapshot, so the detector can already be replaced here.
+        if block != &Block::DAYLIGHT_DETECTOR {
+            return;
+        }
         let mut props = DaylightDetectorProperties::from_state_id(state.id);
 
         let target = Self::calculate_signal_strength(

@@ -6006,10 +6006,7 @@ impl World {
         let block_entity = cause
             .filter(|player| player.gamemode.load() != pumpkin_util::GameMode::Creative)
             .filter(|_| broken_block_state.block_entity_type != u16::MAX)
-            .and_then(|player| {
-                self.get_block_entity(position)
-                    .map(|entity| (player, entity))
-            });
+            .zip(self.get_block_entity(position));
         let broken_state_id = self.set_block_state(position, new_state_id, flags);
         if let Some((player, entity)) = block_entity
             && let Some(tool) = tool

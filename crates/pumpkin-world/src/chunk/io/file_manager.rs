@@ -30,7 +30,7 @@ use crate::{
 use super::{FileIO, LoadedData, RegionFile, region_chunk_index, region_of, run_blocking};
 
 /// A region nobody touched for this long is closed, once its staged chunks are written.
-const REGION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const REGION_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 
 pub(crate) trait PathFromLevelFolder {
     fn file_path(folder: &LevelFolder, file_name: &str) -> PathBuf;
