@@ -136,6 +136,10 @@ impl InteractionEntity {
 }
 
 impl EntityBase for InteractionEntity {
+    fn get_piston_push_reaction(&self) -> pumpkin_data::block_state::PistonBehavior {
+        pumpkin_data::block_state::PistonBehavior::Ignore
+    }
+
     fn write_custom_nbt(&self, nbt: &mut NbtCompound) {
         nbt.put_float(
             "width",

@@ -187,6 +187,7 @@ pub mod natural_spawner;
 mod player_touch;
 pub(crate) use player_touch::pickup_area;
 pub mod scoreboard;
+pub mod shulker_lids;
 pub mod weather;
 
 pub use environment::EnvironmentAttributes;
@@ -282,6 +283,7 @@ pub struct World {
     natural_spawn_chunk_cache: std::sync::Mutex<NaturalSpawnChunkCache>,
     pub active_chunks: RwLock<Arc<FxHashSet<Vector2<i32>>>>,
     pub(crate) navigation_change_sequence: std::sync::atomic::AtomicU64,
+    pub shulker_lids: shulker_lids::ShulkerLids,
     /// Entities spawned by ticking entities, with their sequential order.
     tick_spawns: std::sync::Mutex<Vec<(u64, i32)>>,
     active_chunk_tracker: std::sync::Mutex<ActiveChunkTracker>,
@@ -446,6 +448,7 @@ impl World {
             natural_spawn_chunk_cache: std::sync::Mutex::new(NaturalSpawnChunkCache::default()),
             active_chunks: RwLock::new(Arc::default()),
             navigation_change_sequence: std::sync::atomic::AtomicU64::new(0),
+            shulker_lids: shulker_lids::ShulkerLids::default(),
             tick_spawns: std::sync::Mutex::new(Vec::new()),
             active_chunk_tracker: std::sync::Mutex::new(ActiveChunkTracker::default()),
             forced_chunks: std::sync::Mutex::new(FxHashSet::default()),
@@ -1647,6 +1650,9 @@ impl World {
         self.update_active_chunks();
         self.process_poi_chunks();
         self.tick_environment();
+        if !self.shulker_lids.is_empty() {
+            self.shulker_lids.remove_stale(self.get_world_age());
+        }
         let mut raids = {
             let mut guard = self
                 .raids
@@ -2556,6 +2562,12 @@ impl World {
             }
         }
 
+        self.shulker_lids
+            .for_each_intersecting(&bounding_box, |pos, lid| {
+                collisions.push(lid);
+                positions.push((collisions.len(), pos));
+            });
+
         (collisions, positions)
     }
 
@@ -2611,7 +2623,7 @@ impl World {
                 return false;
             }
         }
-        true
+        !self.shulker_lids.intersects(&bounding_box)
     }
 
     /// No other entity that blocks building overlaps `entity`, ignoring its own vehicle group.

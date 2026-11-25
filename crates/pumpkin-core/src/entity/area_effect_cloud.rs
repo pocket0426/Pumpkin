@@ -154,6 +154,10 @@ impl AreaEffectCloudEntity {
 }
 
 impl EntityBase for AreaEffectCloudEntity {
+    fn get_piston_push_reaction(&self) -> pumpkin_data::block_state::PistonBehavior {
+        pumpkin_data::block_state::PistonBehavior::Ignore
+    }
+
     fn init_data_tracker(&self) {
         // Send initial radius and particle (color) so clients render correctly
         let radius = *self

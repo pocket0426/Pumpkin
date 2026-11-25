@@ -22,6 +22,7 @@ use projectile_deflection::ProjectileDeflection;
 use pumpkin_data::BlockState;
 use pumpkin_data::biome::Biome;
 use pumpkin_data::block_properties::blocks_movement;
+use pumpkin_data::block_state::PistonBehavior;
 use pumpkin_data::data_component_impl::EquipmentSlot;
 use pumpkin_data::dimension::Dimension;
 use pumpkin_data::entity::{EntityAttachments, EntityStatus};
@@ -1051,6 +1052,11 @@ pub trait EntityBase: Send + Sync + std::any::Any {
 
     fn move_entity(&self, caller: &dyn EntityBase, motion: Vector3<f64>) {
         self.get_entity().move_entity(caller, motion);
+    }
+
+    /// Vanilla `Entity.getPistonPushReaction`.
+    fn get_piston_push_reaction(&self) -> PistonBehavior {
+        PistonBehavior::Normal
     }
 
     fn is_pushable(&self) -> bool {

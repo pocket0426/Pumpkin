@@ -338,6 +338,10 @@ impl OminousItemSpawnerEntity {
 }
 
 impl EntityBase for OminousItemSpawnerEntity {
+    fn get_piston_push_reaction(&self) -> pumpkin_data::block_state::PistonBehavior {
+        pumpkin_data::block_state::PistonBehavior::Ignore
+    }
+
     fn init_data_tracker(&self) {
         let item = self.get_item();
         if !item.is_empty() {

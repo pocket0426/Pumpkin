@@ -1,10 +1,14 @@
+use pumpkin_data::block_properties::ShulkerBoxProperties;
+use pumpkin_data::block_state::PistonBehavior;
 use pumpkin_data::data_component_impl::ContainerImpl;
 use pumpkin_data::game_event::GameEvent;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
-use pumpkin_data::tag::Taggable;
+use pumpkin_data::tag::{self, Taggable};
+use pumpkin_data::{BlockDirection, FacingExt};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_util::math::vector3::Vector3;
 use pumpkin_util::random::xoroshiro128::Xoroshiro;
 use pumpkin_util::random::{RandomImpl, get_seed};
 use pumpkin_world::world::BlockFlags;
@@ -15,6 +19,7 @@ use std::{array::from_fn, sync::Arc};
 
 use crate::block::entities::BlockEntity;
 use crate::block::viewer::{ViewerCountListener, ViewerCountTracker, ViewerCountTrackerExt};
+use crate::entity::mob::shulker::ShulkerEntity;
 use crate::world::World;
 use crossbeam::atomic::AtomicCell;
 use pumpkin_inventory::{Clearable, Inventory, sync_write_items_to_nbt};
@@ -88,8 +93,9 @@ impl BlockEntity for ShulkerBoxBlockEntity {
         self.update_animation(world);
     }
 
-    fn on_block_replaced(self: Arc<Self>, _world: &Arc<World>, _position: &BlockPos) {
+    fn on_block_replaced(self: Arc<Self>, world: &Arc<World>, position: &BlockPos) {
         // Shulker boxes retain items when broken
+        world.shulker_lids.remove(position);
     }
 
     fn get_inventory(self: Arc<Self>) -> Option<Arc<dyn Inventory>> {
@@ -211,6 +217,7 @@ impl ShulkerBoxBlockEntity {
     pub const INVENTORY_SIZE: usize = 27;
     pub const OPEN_ANIMATION_EVENT_TYPE: u8 = 1;
     const LID_PROGRESS_PER_TICK: f32 = 0.1;
+    const MAX_LID_HEIGHT: f32 = 0.5;
     pub const ID: &'static str = "minecraft:shulker_box";
 
     #[must_use]
@@ -246,11 +253,72 @@ impl ShulkerBoxBlockEntity {
         true
     }
 
-    // TODO vanilla `updateAnimation` also calls `moveCollidedEntities` while the lid opens. Entities would
-    // fall straight back, because the collision shape here does not follow the lid yet.
     fn update_animation(&self, world: &Arc<World>) {
+        let status_old = self.animation_status.load();
+        let progress_old = self.progress.load();
         if self.step_animation() {
             Self::do_neighbor_updates(world, &self.position);
+        }
+        if status_old == AnimationStatus::Closed {
+            return;
+        }
+
+        let (block, state) = world.get_block_and_state(&self.position);
+        if self.animation_status.load() == AnimationStatus::Closed
+            || !block.has_tag(&tag::Block::MINECRAFT_SHULKER_BOXES)
+        {
+            world.shulker_lids.remove(&self.position);
+            return;
+        }
+        let facing = ShulkerBoxProperties::from_state_id(state.id)
+            .facing
+            .to_block_direction();
+        let progress = self.progress.load();
+        // Vanilla `getBoundingBox` is the block plus this box, and the block is already a collision shape.
+        world.shulker_lids.set(
+            self.position,
+            ShulkerEntity::progress_delta_aabb(
+                1.0,
+                facing,
+                0.0,
+                Self::MAX_LID_HEIGHT * progress,
+                self.position.to_f64(),
+            ),
+            world.get_world_age(),
+        );
+        if status_old == AnimationStatus::Opening {
+            Self::move_collided_entities(world, &self.position, facing, progress_old, progress);
+        }
+    }
+
+    fn move_collided_entities(
+        world: &Arc<World>,
+        position: &BlockPos,
+        facing: BlockDirection,
+        progress_old: f32,
+        progress: f32,
+    ) {
+        const PUSH_MARGIN: f64 = 0.01;
+        let swept = ShulkerEntity::progress_delta_aabb(
+            1.0,
+            facing,
+            progress_old,
+            progress,
+            position.to_f64(),
+        );
+        let size = swept.max - swept.min;
+        let step = facing.to_offset().to_f64();
+        let motion = Vector3::new(
+            (size.x + PUSH_MARGIN) * step.x,
+            (size.y + PUSH_MARGIN) * step.y,
+            (size.z + PUSH_MARGIN) * step.z,
+        );
+        for entity in world.get_all_at_box(&swept) {
+            if entity.is_spectator() || entity.get_piston_push_reaction() == PistonBehavior::Ignore
+            {
+                continue;
+            }
+            entity.move_entity(entity.as_ref(), motion);
         }
     }
 

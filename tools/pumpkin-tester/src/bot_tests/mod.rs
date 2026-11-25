@@ -7,6 +7,7 @@ mod loot_tables;
 mod player_actions;
 mod polar_bear;
 mod sheep_shearing;
+mod shulker_lid;
 mod sign_authorization;
 mod snow_golem;
 mod status_ping;
@@ -16,6 +17,24 @@ use std::{net::SocketAddr, sync::Arc};
 
 use pumpkin_core::server::Server;
 use pumpkin_gametest::GameTestRunner;
+use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
+
+/// A position `distance` blocks from `origin` on X and Z that stays in `origin`'s chunk, which is
+/// loaded when the bot stands in it. Its neighbours may still be loading.
+fn offset_within_chunk(origin: BlockPos, distance: i32) -> BlockPos {
+    let towards_middle = |coordinate: i32| {
+        if coordinate.rem_euclid(16) < 8 {
+            distance
+        } else {
+            -distance
+        }
+    };
+    origin.offset(Vector3::new(
+        towards_middle(origin.0.x),
+        0,
+        towards_middle(origin.0.z),
+    ))
+}
 
 pub async fn run_bot_tests(
     server: &Arc<Server>,
@@ -43,6 +62,7 @@ pub async fn run_bot_tests(
     sheep_shearing::run_sheep_shearing_test(server, summary_lines)?;
     snow_golem::run_snow_golem_shearing_test(server, summary_lines)?;
     bed_villager::run_bed_kicks_sleeping_villager_test(server, summary_lines)?;
+    shulker_lid::run_shulker_lid_pushes_entity_test(server, summary_lines)?;
 
     polar_bear::run_polar_bear_defense_test(server, &bot1, summary_lines)?;
 

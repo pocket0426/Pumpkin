@@ -247,6 +247,14 @@ impl ArmorStandEntity {
 }
 
 impl EntityBase for ArmorStandEntity {
+    fn get_piston_push_reaction(&self) -> pumpkin_data::block_state::PistonBehavior {
+        if self.is_marker() {
+            pumpkin_data::block_state::PistonBehavior::Ignore
+        } else {
+            pumpkin_data::block_state::PistonBehavior::Normal
+        }
+    }
+
     fn can_hit(&self) -> bool {
         !self.get_entity().is_removed() && !self.is_marker()
     }

@@ -15,6 +15,8 @@ use pumpkin_data::{
 use pumpkin_protocol::{codec::var_int::VarInt, java::server::play::SUseItemOn};
 use pumpkin_util::math::vector3::Vector3;
 
+use super::offset_within_chunk;
+
 pub fn run_bed_kicks_sleeping_villager_test(
     server: &Arc<Server>,
     summary_lines: &mut Vec<String>,
@@ -27,11 +29,12 @@ pub fn run_bed_kicks_sleeping_villager_test(
         return Err("Expected a Java player for the bed villager test".into());
     };
 
-    let foot_pos = player
-        .get_entity()
-        .block_pos
-        .load()
-        .offset(Vector3::new(2, 0, 3));
+    let foot_pos = offset_within_chunk(player.get_entity().block_pos.load(), 2);
+    let head_pos = foot_pos.offset(Vector3::new(0, 0, -1));
+    // The spot can be inside terrain, and a bed with a solid block above it counts as obstructed.
+    for pos in [foot_pos, head_pos, foot_pos.up(), head_pos.up()] {
+        world.set_block_state(&pos, Block::AIR.default_state.id, BlockFlags::NOTIFY_ALL);
+    }
     let mut foot = WhiteBedLikeProperties::default(&Block::RED_BED);
     foot.facing = HorizontalFacing::North;
     foot.part = BedPart::Foot;
@@ -41,7 +44,6 @@ pub fn run_bed_kicks_sleeping_villager_test(
         foot.to_state_id(&Block::RED_BED),
         BlockFlags::NOTIFY_ALL,
     );
-    let head_pos = foot_pos.offset(Vector3::new(0, 0, -1));
 
     let villager = VillagerEntity::new(Entity::new(
         world.clone(),
