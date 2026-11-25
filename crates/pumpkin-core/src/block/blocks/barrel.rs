@@ -6,6 +6,7 @@ use crate::block::{
     registry::BlockActionResult,
     {BlockBehaviour, NormalUseArgs},
 };
+use crate::entity::mob::piglin_ai::PiglinAi;
 
 use crate::block::entities::barrel::BarrelBlockEntity;
 use crate::entity::EntityBase;
@@ -69,6 +70,7 @@ impl BlockBehaviour for BarrelBlock {
             );
             args.player
                 .open_handled_screen(factory.as_ref(), Some(*args.position));
+            PiglinAi::anger_nearby_piglins(args.world, args.player, true);
         }
 
         BlockActionResult::Success

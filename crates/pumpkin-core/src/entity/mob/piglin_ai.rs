@@ -17,6 +17,7 @@ use crate::entity::item::ItemEntity;
 use crate::entity::living::LivingEntity;
 use crate::entity::mob::piglin::{PiglinActivity, PiglinEntity};
 use crate::entity::player::Player;
+use crate::world::World;
 
 pub struct PiglinAi;
 
@@ -45,6 +46,44 @@ impl PiglinAi {
     pub const THROW_HAND_Y_DISTANCE_FROM_EYE: f64 = 0.3;
     pub const RANDOM_THROW_POS_RANGE_HORIZONTAL: i32 = 4;
     pub const RANDOM_THROW_POS_RANGE_VERTICAL: i32 = 2;
+
+    /// Vanilla `PiglinAi.angerNearbyPiglins`.
+    // TODO vanilla keeps the anger in the `ANGRY_AT` memory for `ANGER_DURATION` ticks and follows the
+    // universal anger game rule. This piglin has no such memory yet, so the player becomes its target.
+    pub fn anger_nearby_piglins(
+        world: &Arc<World>,
+        player: &Arc<Player>,
+        require_line_of_sight: bool,
+    ) {
+        let area = player
+            .get_entity()
+            .bounding_box
+            .load()
+            .expand_all(Self::PLAYER_ANGER_RANGE);
+        for entity in world
+            .get_entities_of_type_at_box(&area, |entity_type| entity_type == &EntityType::PIGLIN)
+        {
+            let Some(piglin) = entity.cast_any().downcast_ref::<PiglinEntity>() else {
+                continue;
+            };
+            if piglin.activity.load() == PiglinActivity::Idle
+                && (!require_line_of_sight || Self::is_entity_targetable(piglin, player))
+            {
+                Self::set_anger_target(world, piglin, player);
+            }
+        }
+    }
+
+    /// Vanilla `PiglinAi.setAngerTarget`.
+    fn set_anger_target(world: &World, piglin: &PiglinEntity, target: &Arc<Player>) {
+        // Vanilla `Sensor.isEntityAttackableIgnoringLineOfSight`.
+        let attackable = TargetPredicate::create_attackable()
+            .set_base_max_distance(Self::PLAYER_ANGER_RANGE)
+            .ignore_visibility();
+        if attackable.test(world, Some(piglin), target.as_ref()) {
+            piglin.mob_entity.set_target(Some(target.clone()));
+        }
+    }
 
     #[must_use]
     pub const fn is_barter_currency(item_stack: &ItemStack) -> bool {

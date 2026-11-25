@@ -9,6 +9,7 @@ use crate::block::{
     registry::BlockActionResult,
     {BlockBehaviour, NormalUseArgs},
 };
+use crate::entity::mob::piglin_ai::PiglinAi;
 
 use crate::block::entities::shulker_box::{AnimationStatus, ShulkerBoxBlockEntity};
 use crate::entity::mob::shulker::ShulkerEntity;
@@ -96,6 +97,7 @@ impl BlockBehaviour for ShulkerBoxBlock {
             );
             args.player
                 .open_handled_screen(factory.as_ref(), Some(*args.position));
+            PiglinAi::anger_nearby_piglins(args.world, args.player, true);
         }
 
         BlockActionResult::Success

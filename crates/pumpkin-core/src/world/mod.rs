@@ -5988,6 +5988,13 @@ impl World {
             flags.insert(BlockFlags::SKIP_DROPS);
         }
 
+        // Vanilla `Block.playerWillDestroy`.
+        if let Some(player) = cause
+            && broken_block.has_tag(&tag::Block::MINECRAFT_GUARDED_BY_PIGLINS)
+        {
+            crate::entity::mob::piglin_ai::PiglinAi::anger_nearby_piglins(self, player, false);
+        }
+
         let broken_block_state =
             crate::block::blocks::decorated_pot::DecoratedPotBlock::player_will_destroy(
                 self,
