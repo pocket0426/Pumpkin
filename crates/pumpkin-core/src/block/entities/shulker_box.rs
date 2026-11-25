@@ -1,9 +1,13 @@
 use pumpkin_data::data_component_impl::ContainerImpl;
+use pumpkin_data::game_event::GameEvent;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_data::tag::Taggable;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_util::random::xoroshiro128::Xoroshiro;
+use pumpkin_util::random::{RandomImpl, get_seed};
+use pumpkin_world::world::BlockFlags;
 use std::any::Any;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,7 +85,7 @@ impl BlockEntity for ShulkerBoxBlockEntity {
     fn tick(&self, world: &Arc<World>) {
         self.viewers
             .update_viewer_count::<Self>(self, world, &self.position);
-        self.update_animation();
+        self.update_animation(world);
     }
 
     fn on_block_replaced(self: Arc<Self>, _world: &Arc<World>, _position: &BlockPos) {
@@ -187,14 +191,15 @@ impl BlockEntity for ShulkerBoxBlockEntity {
 }
 
 impl ViewerCountListener for ShulkerBoxBlockEntity {
+    // TODO vanilla passes the player as the game event source. The viewer tracker does not carry it.
     fn on_container_open(&self, world: &Arc<World>, position: &BlockPos) {
+        world.emit_game_event(GameEvent::ContainerOpen.name(), position.to_centered_f64());
         Self::play_sound(world, position, 1);
-        // TODO: this.world.emitGameEvent(player, GameEvent.CONTAINER_OPEN, this.pos);
     }
 
     fn on_container_close(&self, world: &Arc<World>, position: &BlockPos) {
+        world.emit_game_event(GameEvent::ContainerClose.name(), position.to_centered_f64());
         Self::play_sound(world, position, 0);
-        // TODO: this.world.emitGameEvent(player, GameEvent.CONTAINER_CLOSE, this.pos);
     }
 
     fn on_viewer_count_update(&self, world: &Arc<World>, position: &BlockPos, _old: u16, new: u16) {
@@ -241,31 +246,57 @@ impl ShulkerBoxBlockEntity {
         true
     }
 
-    // TODO vanilla `updateAnimation` also runs `doNeighborUpdates` when the lid starts or finishes moving
-    // and `moveCollidedEntities` while it opens.
-    fn update_animation(&self) {
+    // TODO vanilla `updateAnimation` also calls `moveCollidedEntities` while the lid opens. Entities would
+    // fall straight back, because the collision shape here does not follow the lid yet.
+    fn update_animation(&self, world: &Arc<World>) {
+        if self.step_animation() {
+            Self::do_neighbor_updates(world, &self.position);
+        }
+    }
+
+    /// Moves the lid by one tick. Returns whether it started or finished moving, where vanilla runs
+    /// `doNeighborUpdates`.
+    #[expect(
+        clippy::float_cmp,
+        reason = "vanilla compares against the exact resting values"
+    )]
+    fn step_animation(&self) -> bool {
+        let progress_old = self.progress.load();
         match self.animation_status.load() {
-            AnimationStatus::Closed => self.progress.store(0.0),
+            AnimationStatus::Closed => {
+                self.progress.store(0.0);
+                false
+            }
             AnimationStatus::Opening => {
-                let progress = self.progress.load() + Self::LID_PROGRESS_PER_TICK;
-                if progress >= 1.0 {
+                let progress = progress_old + Self::LID_PROGRESS_PER_TICK;
+                let finished = progress >= 1.0;
+                if finished {
                     self.animation_status.store(AnimationStatus::Opened);
-                    self.progress.store(1.0);
-                } else {
-                    self.progress.store(progress);
                 }
+                self.progress.store(if finished { 1.0 } else { progress });
+                progress_old == 0.0 || finished
             }
             AnimationStatus::Closing => {
-                let progress = self.progress.load() - Self::LID_PROGRESS_PER_TICK;
-                if progress <= 0.0 {
+                let progress = progress_old - Self::LID_PROGRESS_PER_TICK;
+                let finished = progress <= 0.0;
+                if finished {
                     self.animation_status.store(AnimationStatus::Closed);
-                    self.progress.store(0.0);
-                } else {
-                    self.progress.store(progress);
                 }
+                self.progress.store(if finished { 0.0 } else { progress });
+                progress_old == 1.0 || finished
             }
-            AnimationStatus::Opened => self.progress.store(1.0),
+            AnimationStatus::Opened => {
+                self.progress.store(1.0);
+                false
+            }
         }
+    }
+
+    fn do_neighbor_updates(world: &Arc<World>, position: &BlockPos) {
+        world
+            .block_registry
+            .update_neighbors(world, position, BlockFlags::NOTIFY_ALL);
+        world.update_neighbors(position, None);
     }
 
     pub fn update_viewers(&self, world: &Arc<World>) {
@@ -280,7 +311,14 @@ impl ShulkerBoxBlockEntity {
             Sound::BlockShulkerBoxClose
         };
 
-        world.play_sound(sound, SoundCategory::Blocks, &position.to_f64());
+        let mut rng = Xoroshiro::from_seed(get_seed());
+        world.play_sound_fine(
+            sound,
+            SoundCategory::Blocks,
+            &position.to_centered_f64(),
+            0.5,
+            rng.next_f32() * 0.1 + 0.9,
+        );
     }
 }
 
@@ -424,12 +462,15 @@ mod tests {
         assert_eq!(shulker_box.animation_status(), AnimationStatus::Closed);
 
         assert!(shulker_box.trigger_event(ShulkerBoxBlockEntity::OPEN_ANIMATION_EVENT_TYPE, 1));
-        for _ in 0..9 {
-            shulker_box.update_animation();
+        // Neighbours are updated on the first and the last tick of the movement only.
+        assert!(shulker_box.step_animation());
+        for _ in 0..8 {
+            assert!(!shulker_box.step_animation());
         }
         assert_eq!(shulker_box.animation_status(), AnimationStatus::Opening);
-        shulker_box.update_animation();
+        assert!(shulker_box.step_animation());
         assert_eq!(shulker_box.animation_status(), AnimationStatus::Opened);
+        assert!(!shulker_box.step_animation());
 
         // A second viewer leaves the lid as it is.
         assert!(shulker_box.trigger_event(ShulkerBoxBlockEntity::OPEN_ANIMATION_EVENT_TYPE, 2));
@@ -437,8 +478,9 @@ mod tests {
 
         assert!(shulker_box.trigger_event(ShulkerBoxBlockEntity::OPEN_ANIMATION_EVENT_TYPE, 0));
         assert_eq!(shulker_box.animation_status(), AnimationStatus::Closing);
-        for _ in 0..11 {
-            shulker_box.update_animation();
+        assert!(shulker_box.step_animation());
+        for _ in 0..10 {
+            shulker_box.step_animation();
         }
         assert_eq!(shulker_box.animation_status(), AnimationStatus::Closed);
 
