@@ -1,3 +1,4 @@
+use crate::block::blocks::farmland::turn_to_dirt;
 use crate::block::{
     BlockBehaviour, CanPlaceAtArgs, GetStateForNeighborUpdateArgs, OnPlaceArgs,
     OnScheduledTickArgs, PathComputationType,
@@ -10,19 +11,13 @@ use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::tick::TickPriority;
 use pumpkin_world::world::BlockAccessor;
-use pumpkin_world::world::BlockFlags;
 
 #[pumpkin_block("minecraft:dirt_path")]
 pub struct DirtPathBlock;
 
 impl BlockBehaviour for DirtPathBlock {
     fn on_scheduled_tick(&self, args: OnScheduledTickArgs<'_>) {
-        // TODO: push up entities
-        args.world.set_block_state(
-            args.position,
-            Block::DIRT.default_state.id,
-            BlockFlags::NOTIFY_ALL,
-        );
+        turn_to_dirt(None, args.world, args.position);
     }
 
     fn on_place(&self, args: OnPlaceArgs<'_>) -> BlockStateId {

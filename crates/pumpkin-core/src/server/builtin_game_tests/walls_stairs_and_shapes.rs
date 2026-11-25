@@ -8,6 +8,7 @@ use pumpkin_data::{
 };
 use pumpkin_gametest::{GameTestHelper, GameTestResult};
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_util::math::vector3::Vector3;
 
 use super::build_stone_floor;
 
@@ -286,6 +287,35 @@ pub(super) async fn test_farmland_turns_to_dirt_under_solid_block(
         .then_idle(2)
         .then_execute(move |helper| async move {
             helper.assert_block_present(&farm, &Block::DIRT).await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+pub(super) async fn test_dirt_path_pushes_entity_up_when_turning_to_dirt(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 4, 4).await?;
+    let path = BlockPos::new(1, 1, 1);
+    let above = BlockPos::new(1, 2, 1);
+    helper.set_block_default(&path, &Block::DIRT_PATH).await?;
+    // Feet on the path surface, 15/16 of a block up.
+    helper
+        .spawn_entity_at("minecraft:armor_stand", Vector3::new(1.5, 1.9375, 1.5))
+        .await?;
+    helper.set_block_default(&above, &Block::STONE).await?;
+
+    helper
+        .start_sequence()
+        .then_idle(2)
+        .then_execute(move |helper| async move {
+            helper.assert_block_present(&path, &Block::DIRT).await?;
+            helper
+                .assert_entity_not_present_at("minecraft:armor_stand", &path)
+                .await?;
+            helper
+                .assert_entity_present_at("minecraft:armor_stand", &above)
+                .await
         })
         .then_succeed();
     Ok(())

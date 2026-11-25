@@ -203,6 +203,7 @@ const BUILTIN_TEST_IDS: &[&str] = &[
     "pumpkin:stairs_revert_to_straight_when_neighbor_removed",
     "pumpkin:dirt_path_turns_to_dirt_under_solid_block",
     "pumpkin:farmland_turns_to_dirt_under_solid_block",
+    "pumpkin:dirt_path_pushes_entity_up_when_turning_to_dirt",
     "pumpkin:campfire_signal_fire_over_hay_block",
     "pumpkin:campfire_waterlogged_extinguishes_lit",
     // plants_and_support_blocks (12)
@@ -1345,6 +1346,13 @@ pub fn ensure_builtin_game_tests_registered() {
             20,
             0,
             walls_stairs_and_shapes::test_farmland_turns_to_dirt_under_solid_block,
+        );
+        register_function_test(
+            "pumpkin:dirt_path_pushes_entity_up_when_turning_to_dirt",
+            "pumpkin:empty_4x4x4",
+            20,
+            0,
+            walls_stairs_and_shapes::test_dirt_path_pushes_entity_up_when_turning_to_dirt,
         );
         register_function_test(
             "pumpkin:campfire_signal_fire_over_hay_block",

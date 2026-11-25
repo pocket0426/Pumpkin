@@ -27,7 +27,7 @@ use pumpkin_data::item_stack::ItemStack;
 use pumpkin_inventory::screen_handler::ScreenHandlerFactory;
 use pumpkin_protocol::java::server::play::SUseItemOn;
 use pumpkin_util::math::boundingbox::BoundingBox;
-use pumpkin_util::math::vector3::Vector3;
+use pumpkin_util::math::vector3::{Axis, Vector3};
 use pumpkin_world::world::{BlockAccessor, BlockFlags};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -502,6 +502,36 @@ pub struct BlockEvent {
     pub pos: BlockPos,
     pub r#type: u8,
     pub data: u8,
+}
+
+/// Vanilla `Block.pushEntitiesUp`: lifts entities out of the collision `new_state` adds to `old_state`.
+pub fn push_entities_up(
+    world: &Arc<World>,
+    pos: &BlockPos,
+    old_state: &BlockState,
+    new_state: &BlockState,
+) {
+    let mut added: Vec<BoundingBox> = new_state.get_block_collision_shapes_at(pos).collect();
+    for old in old_state.get_block_collision_shapes_at(pos) {
+        added = added
+            .iter()
+            .flat_map(|shape| shape.subtract(&old))
+            .collect();
+    }
+    let added: Vec<BoundingBox> = added.iter().map(|shape| shape.at_pos(*pos)).collect();
+    let Some(bounds) = added.iter().copied().reduce(|a, b| a.minmax(&b)) else {
+        return;
+    };
+    for entity in world.get_all_at_box(&bounds) {
+        if entity.is_spectator() {
+            continue;
+        }
+        let base = entity.get_entity();
+        let lifted = base.bounding_box.load().shift(Vector3::new(0.0, 1.0, 0.0));
+        let (offset, _) = lifted.collide_along(Axis::Y, &added, -1.0);
+        let position = base.pos.load().add_raw(0.0, 1.0 + offset, 0.0);
+        entity.teleport(position, None, None, world.clone());
+    }
 }
 
 /// Rolls the block's loot table and fires `BlockDropItemEvent`, without spawning anything.
