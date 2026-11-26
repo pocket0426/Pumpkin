@@ -39,6 +39,9 @@ pub struct HopperBlockEntity {
     pub comparator_dirty: AtomicBool,
     pub cooldown_time: AtomicI32,
     pub ticked_game_time: AtomicI64,
+    /// Serializes `try_move_items`: an item entity touching the hopper and the hopper's own tick
+    /// can arrive from different workers, and both must see the other's cooldown.
+    move_lock: std::sync::Mutex<()>,
     pub metadata: super::ContainerMetadata,
 }
 
@@ -88,6 +91,7 @@ impl BlockEntity for HopperBlockEntity {
                     .unwrap_or(Self::NO_COOLDOWN_TIME),
             ),
             ticked_game_time: AtomicI64::new(0),
+            move_lock: std::sync::Mutex::new(()),
             metadata: super::ContainerMetadata::from_nbt(nbt),
         };
 
@@ -124,7 +128,7 @@ impl BlockEntity for HopperBlockEntity {
             && let Some(entity) = world.get_block_entity(&self.position)
             && let Some(hopper) = entity.as_any().downcast_ref::<Self>()
         {
-            hopper.try_move_items(properties, world);
+            hopper.try_move_items(properties, world, || hopper.suck_in_items(world));
         }
     }
 
@@ -219,6 +223,7 @@ impl HopperBlockEntity {
             comparator_dirty: AtomicBool::new(false),
             cooldown_time: AtomicI32::new(Self::NO_COOLDOWN_TIME),
             ticked_game_time: AtomicI64::new(0),
+            move_lock: std::sync::Mutex::new(()),
             metadata: super::ContainerMetadata::default(),
         }
     }
@@ -394,21 +399,82 @@ impl HopperBlockEntity {
         Self::put_back(source, slot, one_item).map_or(Ok(false), Err)
     }
 
-    fn try_move_items(&self, state: HopperLikeProperties, world: &Arc<World>) {
+    /// Vanilla `HopperBlockEntity.tryMoveItems`, with `action` as its `BooleanSupplier`.
+    fn try_move_items(
+        &self,
+        state: HopperLikeProperties,
+        world: &Arc<World>,
+        action: impl FnOnce() -> bool,
+    ) -> bool {
+        let _moving = self
+            .move_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Emptiness before the cooldown check, so a just inserted item isn't ejected this tick.
         let has_items = !self.is_empty();
         if self.cooldown_time.load(Ordering::Relaxed) <= 0 && state.enabled {
             let mut success = has_items && self.eject_items(world, state.facing);
             if !self.inventory_full() {
-                success |= self.suck_in_items(world);
+                success |= action();
             }
             if success {
                 // Vanilla `setCooldown(8)`: overrides a cooldown an insert set during this move.
                 self.cooldown_time
                     .store(Self::MOVE_ITEM_SPEED, Ordering::Relaxed);
                 self.mark_dirty();
+                return true;
             }
         }
+        false
+    }
+
+    /// Vanilla `HopperBlockEntity.entityInside`: an item entity reaching into the bowl is taken
+    /// in right away, through `tryMoveItems`, so the cooldown and the enabled state still apply.
+    /// Unlike the hopper's own pull, a full block on top does not stop this.
+    pub fn entity_inside(
+        &self,
+        world: &Arc<World>,
+        state: HopperLikeProperties,
+        item_entity: &ItemEntity,
+    ) {
+        // Cheapest test first, an item resting in a busy hopper asks every tick
+        if self.cooldown_time.load(Ordering::Relaxed) > 0 || !state.enabled {
+            return;
+        }
+        if !item_entity
+            .get_entity()
+            .bounding_box
+            .load()
+            .intersects(&SUCK_AABB.at_pos(self.position))
+        {
+            return;
+        }
+        self.try_move_items(state, world, || {
+            self.pickup_item_entity_with_event(world, item_entity)
+        });
+    }
+
+    /// Takes the item entity in unless it is empty or a plugin cancels the pickup.
+    fn pickup_item_entity_with_event(&self, world: &Arc<World>, item_entity: &ItemEntity) -> bool {
+        let (is_empty, item_id) = {
+            let stack = item_entity
+                .get_item_stack()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (stack.is_empty(), stack.item.registry_key)
+        };
+        if is_empty
+            || world.cancelled_by_plugin(|| {
+                InventoryPickupItemEvent::new(
+                    self.position,
+                    item_entity.get_entity().entity_id,
+                    item_id.to_string(),
+                )
+            })
+        {
+            return false;
+        }
+        Self::pickup_item_entity(self, item_entity)
     }
 
     fn inventory_full(&self) -> bool {
@@ -484,25 +550,7 @@ impl HopperBlockEntity {
                 let Some(item_entity) = entity_base.get_item_entity() else {
                     continue;
                 };
-                let (is_empty, item_id) = {
-                    let stack = item_entity
-                        .get_item_stack()
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    (stack.is_empty(), stack.item.registry_key)
-                };
-                if is_empty
-                    || world.cancelled_by_plugin(|| {
-                        InventoryPickupItemEvent::new(
-                            self.position,
-                            item_entity.get_entity().entity_id,
-                            item_id.to_string(),
-                        )
-                    })
-                {
-                    continue;
-                }
-                if Self::pickup_item_entity(self, item_entity) {
+                if self.pickup_item_entity_with_event(world, item_entity) {
                     return true;
                 }
             }

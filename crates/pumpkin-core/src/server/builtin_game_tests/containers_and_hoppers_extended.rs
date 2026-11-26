@@ -17,6 +17,36 @@ fn hopper_state(facing: FacingHopper, enabled: bool) -> BlockStateId {
     props.to_state_id(&Block::HOPPER)
 }
 
+/// Vanilla `HopperBlock.entityInside`: an item already inside the bowl is taken in even with a
+/// full block on top, which stops the hopper's own pull from above.
+pub(super) async fn test_covered_hopper_takes_item_inside_its_bowl(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 4, 4).await?;
+    let hopper = BlockPos::new(1, 1, 1);
+    helper
+        .set_block(&hopper, hopper_state(FacingHopper::Down, true))
+        .await?;
+    helper
+        .set_block(&hopper.up(), Block::STONE.default_state.id)
+        .await?;
+    helper
+        .spawn_item_at("minecraft:emerald", 1, Vector3::new(1.5, 1.7, 1.5))
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(6)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_container_contains_count(&hopper, "minecraft:emerald", 1)
+                .await?;
+            helper.assert_entity_not_present("minecraft:item").await
+        })
+        .then_succeed();
+    Ok(())
+}
+
 pub(super) async fn test_hopper_pulls_item_entity_from_above(
     helper: GameTestHelper,
 ) -> GameTestResult<()> {
