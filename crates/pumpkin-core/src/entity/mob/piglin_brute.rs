@@ -37,10 +37,9 @@ impl PiglinBruteEntity {
             time_in_overworld: AtomicI32::new(0),
         };
         let mob_arc = Arc::new(piglin);
-        mob_arc.mob_entity.init_brain(mob_arc.as_ref());
         mob_arc
             .mob_entity
-            .with_brain(mob_arc.as_ref(), piglin_brute_ai::init_memories);
+            .with_brain_tick(mob_arc.as_ref(), piglin_brute_ai::init_memories);
         mob_arc
     }
 

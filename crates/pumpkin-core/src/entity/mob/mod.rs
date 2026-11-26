@@ -3,7 +3,7 @@ use super::{
 };
 use crate::block::blocks::bubble_column::SURFACE_UPWARD_ACCELERATION;
 use crate::entity::ai::behavior::temperament::Temperament;
-use crate::entity::ai::brain::Brain;
+use crate::entity::ai::brain::{Brain, BrainTick};
 use crate::entity::ai::brain::memory::PackedMemories;
 use crate::entity::ai::brain::memory::codec::{block_pos_from_tag, block_pos_to_tag};
 use crate::entity::ai::control::body_rotation_control::BodyRotationControl;
@@ -137,6 +137,9 @@ impl SteeredMob<'_> {
     }
 }
 
+/// Work posted by another mob's tick, run against the owner's own brain on its next tick.
+pub type BrainMessage = Box<dyn FnOnce(&mut BrainTick<'_>) + Send>;
+
 pub struct MobEntity {
     pub living_entity: LivingEntity,
     pub goals_selector: GoalSelector,
@@ -151,6 +154,8 @@ pub struct MobEntity {
     pub jump_control: std::sync::Mutex<JumpControl>,
     pub body_rotation_control: std::sync::Mutex<BodyRotationControl>,
     brain: std::sync::Mutex<Option<Brain>>,
+    brain_inbox: std::sync::Mutex<Vec<BrainMessage>>,
+    brain_inbox_pending: AtomicBool,
     brain_memory_clear_requested: AtomicBool,
     brain_refresh_requested: AtomicBool,
     removal_cleanup_done: AtomicBool,
@@ -312,6 +317,8 @@ impl MobEntity {
             jump_control: std::sync::Mutex::new(JumpControl::default()),
             body_rotation_control: std::sync::Mutex::new(BodyRotationControl::default()),
             brain: std::sync::Mutex::new(None),
+            brain_inbox: std::sync::Mutex::new(Vec::new()),
+            brain_inbox_pending: AtomicBool::new(false),
             brain_memory_clear_requested: AtomicBool::new(false),
             brain_refresh_requested: AtomicBool::new(false),
             removal_cleanup_done: AtomicBool::new(false),
@@ -800,10 +807,83 @@ impl MobEntity {
         self.brain_refresh_requested.store(true, Ordering::Release);
     }
 
-    pub fn tick_brain(&self, mob: &dyn Mob) {
+    /// Queues a write to this mob's brain. Entities tick in parallel, so one mob never writes
+    /// another's brain directly; the message runs at the start of the owner's next brain tick.
+    pub fn post_to_brain(&self, message: BrainMessage) {
+        self.brain_inbox
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(message);
+        self.brain_inbox_pending.store(true, Ordering::Release);
+    }
+
+    /// Skips the inbox lock on the common tick where nothing was posted.
+    fn take_brain_messages(&self) -> Vec<BrainMessage> {
+        if !self.brain_inbox_pending.swap(false, Ordering::AcqRel) {
+            return Vec::new();
+        }
+        std::mem::take(
+            &mut *self
+                .brain_inbox
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Reaches the brain as a `BrainTick` from outside a brain tick.
+    pub fn with_brain_tick<R>(
+        &self,
+        mob: &dyn Mob,
+        callback: impl FnOnce(&mut BrainTick<'_>) -> R,
+    ) -> R {
         let world = self.living_entity.entity.world.load_full();
         let time = world.get_world_age();
-        self.with_brain(mob, |brain| brain.tick(&world, mob, time));
+        self.with_brain(mob, |brain| {
+            callback(&mut BrainTick {
+                state: brain,
+                world: &world,
+                mob,
+                time,
+            })
+        })
+    }
+
+    /// Applies queued messages without running the brain, for a mob that died this tick.
+    pub fn apply_brain_inbox(&self, mob: &dyn Mob) {
+        let messages = self.take_brain_messages();
+        if !messages.is_empty() {
+            self.with_brain_tick(mob, |tick| {
+                for message in messages {
+                    message(tick);
+                }
+            });
+        }
+    }
+
+    pub fn tick_brain(&self, mob: &dyn Mob) {
+        let messages = self.take_brain_messages();
+        let world = self.living_entity.entity.world.load_full();
+        let time = world.get_world_age();
+        self.with_brain(mob, |brain| {
+            if !messages.is_empty() {
+                let mut tick = BrainTick {
+                    state: brain,
+                    world: &world,
+                    mob,
+                    time,
+                };
+                for message in messages {
+                    message(&mut tick);
+                }
+            }
+            brain.tick(&world, mob, time);
+            mob.after_brain_tick(&mut BrainTick {
+                state: brain,
+                world: &world,
+                mob,
+                time,
+            });
+        });
         if self.brain_refresh_requested.swap(false, Ordering::AcqRel) {
             self.refresh_brain(mob);
         }
@@ -2061,6 +2141,16 @@ pub trait Mob: EntityBase + Send + Sync {
         self.can_hold_item(stack)
     }
 
+    /// `wants_to_pick_up` for a caller already inside this mob's brain tick, where a mob whose
+    /// answer reads its brain must not lock it again.
+    fn wants_to_pick_up_in_brain(
+        &self,
+        _brain: &crate::entity::ai::brain::BrainState,
+        stack: &ItemStack,
+    ) -> bool {
+        self.wants_to_pick_up(stack)
+    }
+
     fn get_pickup_reach(&self) -> Vector3<f64> {
         MobEntity::ITEM_PICKUP_REACH
     }
@@ -2599,6 +2689,15 @@ pub trait Mob: EntityBase + Send + Sync {
 
     /// Runs after navigation and before the movement controls, where vanilla ticks a mob's brain.
     fn custom_server_ai_step(&self, _caller: &dyn EntityBase) {}
+
+    /// Runs right after `Brain::tick`, where vanilla mobs run their own `updateActivity`.
+    fn after_brain_tick(&self, _tick: &mut BrainTick<'_>) {}
+
+    /// Vanilla reads `ProjectileWeaponItem.getDefaultProjectileRange` off the main hand; a mob
+    /// answers `None` when it is not holding a weapon it can use at range.
+    fn non_melee_weapon_range(&self) -> Option<i32> {
+        None
+    }
 
     /// Builds this mob's brain from its saved memories; goal mobs keep the brain-dead default.
     fn make_brain(&self, _packed: &PackedMemories) -> Brain {

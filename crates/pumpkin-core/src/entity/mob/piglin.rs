@@ -73,9 +73,8 @@ impl PiglinEntity {
         };
         let mob_arc = Arc::new(piglin);
         mob_arc.mob_entity.set_can_pick_up_loot(true);
-        mob_arc.mob_entity.init_brain(mob_arc.as_ref());
         // Vanilla does this in finalizeSpawn; a loaded mob rebuilds its brain after
-        mob_arc.mob_entity.with_brain(mob_arc.as_ref(), |tick| {
+        mob_arc.mob_entity.with_brain_tick(mob_arc.as_ref(), |tick| {
             let mut rng = tick.mob.get_random();
             piglin_ai::init_memories(tick.state, &mut rng);
         });
@@ -229,7 +228,7 @@ impl PiglinEntity {
     }
     pub fn hold_in_off_hand(&self, item: ItemStack) {
         if self.is_holding_item_in_off_hand() {
-            self.mob_entity.spawn_at_location(self.off_hand_item());
+            self.get_entity().spawn_at_location(self.off_hand_item());
         }
         let keep_loaded = !piglin_ai::is_barter_currency(&item);
         self.mob_entity
@@ -264,9 +263,9 @@ impl PiglinEntity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         !stack.is_empty()
-            && self.mob_entity.with_brain(self, |tick| {
-                <Self as Mob>::wants_to_pick_up(self, tick.state, &stack)
-            })
+            && self
+                .mob_entity
+                .with_brain(self, |brain| self.wants_to_pick_up_in_brain(brain, &stack))
     }
     pub fn make_sound(&self, sound: Sound) {
         let entity = &self.mob_entity.living_entity.entity;
@@ -288,7 +287,7 @@ impl PiglinEntity {
             && rand::random_range(0..1000) < self.ambient_sound_time.fetch_add(1, Ordering::Relaxed)
         {
             self.reset_ambient_sound_time();
-            let sound = self.mob_entity.with_brain(self, |tick| {
+            let sound = self.mob_entity.with_brain_tick(self, |tick| {
                 let converting = self.is_converting(tick.world);
                 piglin_ai::get_sound_for_current_activity(&tick.visibility(), converting)
             });
@@ -369,7 +368,7 @@ impl PiglinEntity {
             item.init_data_tracker();
         }
 
-        self.mob_entity.with_brain(self, |tick| {
+        self.mob_entity.with_brain_tick(self, |tick| {
             piglin_ai::pick_up_item(tick, self, taken);
         });
     }
@@ -501,7 +500,7 @@ impl abstract_piglin::AbstractPiglin for PiglinEntity {
 
     fn finish_conversion(&self) {
         self.mob_entity
-            .with_brain(self, |tick| piglin_ai::cancel_admiring(tick, self));
+            .with_brain_tick(self, |tick| piglin_ai::cancel_admiring(tick, self));
         self.convert_to_zombified();
     }
 }
@@ -600,9 +599,7 @@ impl Mob for PiglinEntity {
         if !inv.is_empty() {
             let mut items_tag = Vec::new();
             for item in inv.iter() {
-                if !item.is_empty() {
-                    let mut item_nbt = NbtCompound::new();
-                    item.write_item_stack(&mut item_nbt);
+                if let Some(item_nbt) = item.to_nbt() {
                     items_tag.push(NbtTag::Compound(item_nbt));
                 }
             }
@@ -648,17 +645,18 @@ impl Mob for PiglinEntity {
     }
 
     fn mob_interact(&self, player: &Arc<Player>, item_stack: &mut ItemStack) -> bool {
-        let can_admire = self.mob_entity.with_brain(self, |tick| {
+        let can_admire = self.mob_entity.with_brain_tick(self, |tick| {
             piglin_ai::can_admire(tick.state, self, item_stack)
         });
         if can_admire {
             let taken = item_stack.split_unless_creative(player.gamemode.load(), 1);
-            self.mob_entity.with_brain(self, |tick| {
+            self.mob_entity.with_brain_tick(self, |tick| {
                 piglin_ai::start_admiring(tick, self, taken);
             });
             return true;
         }
-        self.mob_entity.mob_interact(player, item_stack)
+        self.mob_entity
+            .mob_interact(player, item_stack, self.can_be_leashed())
     }
 
     fn make_brain(
@@ -684,7 +682,16 @@ impl Mob for PiglinEntity {
         abstract_piglin::tick_conversion(self, &world, &self.time_in_overworld);
     }
 
-    fn wants_to_pick_up(&self, brain: &crate::entity::ai::brain::Brain, stack: &ItemStack) -> bool {
+    fn wants_to_pick_up(&self, stack: &ItemStack) -> bool {
+        self.mob_entity
+            .with_brain(self, |brain| self.wants_to_pick_up_in_brain(brain, stack))
+    }
+
+    fn wants_to_pick_up_in_brain(
+        &self,
+        brain: &crate::entity::ai::brain::BrainState,
+        stack: &ItemStack,
+    ) -> bool {
         let entity = &self.mob_entity.living_entity.entity;
         if !entity
             .world

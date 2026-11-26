@@ -15,7 +15,7 @@ use crate::world::World;
 
 use super::super::memory::position_tracker::{BlockPosTracker, EntityTracker, PositionTracker};
 use super::super::memory::walk_target::WalkTarget;
-use super::super::memory::{MemoryModuleType, types};
+use super::super::memory::{GlobalPos, MemoryModuleType, types};
 use super::super::{BrainState, BrainTick, VisibilityContext};
 
 #[must_use]
@@ -166,7 +166,12 @@ pub fn get_living_entity_from_uuid_memory(
     memory: MemoryModuleType<Uuid>,
 ) -> Option<Arc<dyn EntityBase>> {
     let uuid = *brain.get(memory)?;
-    let entity = world.get_entity_by_uuid(uuid)?;
+    // Players live in their own registry, and vanilla `Level.getEntity` finds them too
+    let entity = world.get_entity_by_uuid(uuid).or_else(|| {
+        world
+            .get_player_by_uuid(uuid)
+            .map(|player| player as Arc<dyn EntityBase>)
+    })?;
     entity.get_living_entity().is_some().then_some(entity)
 }
 
@@ -186,10 +191,24 @@ pub fn is_other_target_much_further_away_than_current_attack_target(
     dist_to_other > dist_to_current + how_much_further_away * how_much_further_away
 }
 
-// Melee reach only, the ranged weapon branch is not ported.
+/// Vanilla `BehaviorUtils.isWithinAttackRange`.
 #[must_use]
-pub fn is_within_attack_range(body: &dyn Mob, target: &dyn EntityBase) -> bool {
-    body.get_mob_entity().is_in_attack_range(target)
+pub fn is_within_attack_range(
+    body: &dyn Mob,
+    target: &dyn EntityBase,
+    projectile_attack_range_margin: i32,
+) -> bool {
+    body.non_melee_weapon_range().map_or_else(
+        || body.get_mob_entity().is_in_attack_range(target),
+        |range| {
+            let max_allowed = f64::from(range - projectile_attack_range_margin);
+            body.get_entity()
+                .pos
+                .load()
+                .squared_distance_to_vec(&target.get_entity().pos.load())
+                < max_allowed * max_allowed
+        },
+    )
 }
 
 #[must_use]
@@ -249,4 +268,25 @@ pub fn throw_item(thrower: &dyn Mob, stack: ItemStack, target_pos: Vector3<f64>)
     );
     item_entity.set_thrower(entity.entity_uuid);
     world.spawn_entity(Arc::new(item_entity));
+}
+
+/// Vanilla `LivingEntity.isAlive`, which is health aware, unlike `Entity::is_alive`.
+#[must_use]
+pub fn is_alive(entity: &dyn EntityBase) -> bool {
+    entity
+        .get_living_entity()
+        .is_some_and(crate::entity::living::LivingEntity::is_alive)
+}
+
+#[must_use]
+pub fn is_dead_or_dying(entity: &dyn EntityBase) -> bool {
+    entity
+        .get_living_entity()
+        .is_some_and(crate::entity::living::LivingEntity::is_dead_or_dying)
+}
+
+/// The `GlobalPos` of `pos` in `world`.
+#[must_use]
+pub fn global_pos_in(world: &World, pos: pumpkin_util::math::position::BlockPos) -> Option<GlobalPos> {
+    Dimension::from_name(world.dimension.minecraft_name).map(|dimension| GlobalPos::new(dimension, pos))
 }

@@ -984,7 +984,7 @@ impl LivingEntity {
             entity_type: format!("minecraft:{}", self.entity.entity_type.resource_name),
             item_id: stack.item.registry_key.to_string(),
             is_baby: self.is_baby(),
-            player_wearing_safe_armor: crate::entity::mob::piglin_ai::PiglinAi::is_wearing_safe_armor(&player.living_entity),
+            player_wearing_safe_armor: crate::entity::mob::piglin_ai::is_wearing_safe_armor(player),
         });
     }
 

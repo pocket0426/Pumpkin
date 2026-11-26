@@ -21,7 +21,7 @@ use crate::entity::ai::brain::behavior::{self, BehaviorControl};
 use crate::entity::ai::brain::memory::{MemoryStatus, types};
 use crate::entity::ai::brain::sensing::SensorType;
 use crate::entity::ai::brain::sensing::is_entity_attackable_ignoring_line_of_sight;
-use crate::entity::ai::brain::{Brain, BrainState, BrainTick, VisibilityContext};
+use crate::entity::ai::brain::{BrainState, BrainTick, VisibilityContext};
 use crate::entity::ai::brain::{BrainProvider, memory::MemoryModuleId};
 use crate::entity::ai::util::land_random_pos;
 use crate::entity::item::ItemEntity;
@@ -155,7 +155,7 @@ pub fn is_adult_piglin(entity: &dyn EntityBase) -> bool {
 #[must_use]
 pub fn is_baby_hoglin(entity: &dyn EntityBase) -> bool {
     as_hoglin(entity)
-        .is_some_and(|hoglin| hoglin.is_baby.load(std::sync::atomic::Ordering::Relaxed))
+        .is_some_and(|hoglin| hoglin.mob_entity.living_entity.is_baby())
 }
 
 #[must_use]
@@ -325,7 +325,7 @@ pub fn find_nearest_valid_attack_target(
         return Some(Arc::clone(nemesis));
     }
     let player = ctx
-        .brain
+        .state
         .get(types::NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD)?;
     let player = Arc::clone(player) as Arc<dyn EntityBase>;
     crate::entity::ai::brain::sensing::is_entity_attackable(ctx, player.as_ref()).then_some(player)
@@ -360,7 +360,7 @@ pub fn set_anger_target(
 ) {
     let attackable = {
         let ctx = VisibilityContext {
-            brain,
+            state: brain,
             world: ctx_world,
             mob,
             follow_range: mob
@@ -394,6 +394,47 @@ pub fn set_anger_target(
     }
 }
 
+/// Vanilla `PiglinAi.PLAYER_ANGER_RANGE`.
+pub const PLAYER_ANGER_RANGE: f64 = 16.0;
+
+/// Vanilla `PiglinAi.angerNearbyPiglins`, for a player opening or breaking a guarded block.
+///
+/// Each piglin judges and reacts on its own brain through its inbox, so this never locks a
+/// brain from the caller's thread.
+pub fn anger_nearby_piglins(world: &World, player: &Arc<Player>, only_if_they_see_the_player: bool) {
+    let area = player
+        .get_entity()
+        .bounding_box
+        .load()
+        .expand_all(PLAYER_ANGER_RANGE);
+    for entity in
+        world.get_entities_of_type_at_box(&area, |entity_type| entity_type == &EntityType::PIGLIN)
+    {
+        let Some(piglin) = as_piglin(entity.as_ref()) else {
+            continue;
+        };
+        let player = Arc::clone(player) as Arc<dyn EntityBase>;
+        piglin.get_mob_entity().post_to_brain(Box::new(move |tick| {
+            if !is_idle(tick.state)
+                || (only_if_they_see_the_player
+                    && !behavior::utils::can_see(&tick.visibility(), player.as_ref()))
+            {
+                return;
+            }
+            let world = Arc::clone(tick.world);
+            let mut rng = tick.mob.get_random();
+            // Vanilla `setAngerTargetToNearestTargetablePlayerIfFound` under universal anger
+            let target = if world.level_info.load().game_rules.universal_anger {
+                get_nearest_visible_targetable_player(tick.state)
+                    .map_or(player, |nearest| nearest as Arc<dyn EntityBase>)
+            } else {
+                player
+            };
+            set_anger_target(tick.state, &world, tick.mob, &target, &mut rng);
+        }));
+    }
+}
+
 pub fn set_avoid_target_and_dont_hunt_for_a_while(
     brain: &mut BrainState,
     target: Arc<dyn EntityBase>,
@@ -410,7 +451,7 @@ pub fn set_avoid_target_and_dont_hunt_for_a_while(
 /// Queues `set_anger_target` on every nearby adult piglin; vanilla writes them inline.
 pub fn broadcast_anger_target(tick: &mut BrainTick<'_>, target: &Arc<dyn EntityBase>) {
     let adults = tick
-        .brain
+        .state
         .get(types::NEARBY_ADULT_PIGLINS)
         .cloned()
         .unwrap_or_default();
@@ -418,7 +459,7 @@ pub fn broadcast_anger_target(tick: &mut BrainTick<'_>, target: &Arc<dyn EntityB
     let target_can_be_hunted = hoglin_can_be_hunted(target.as_ref());
 
     for other in adults {
-        let Some(mob_entity) = other.as_mob_entity() else {
+        let Some(mob_entity) = other.get_mob().map(Mob::get_mob_entity) else {
             continue;
         };
         let hunter = as_piglin(other.as_ref()).is_some_and(PiglinEntity::can_hunt);
@@ -453,12 +494,12 @@ fn set_anger_target_if_closer_than_current(
 
 pub fn broadcast_universal_anger(tick: &mut BrainTick<'_>) {
     let adults = tick
-        .brain
+        .state
         .get(types::NEARBY_ADULT_PIGLINS)
         .cloned()
         .unwrap_or_default();
     for other in adults {
-        let Some(mob_entity) = other.as_mob_entity() else {
+        let Some(mob_entity) = other.get_mob().map(Mob::get_mob_entity) else {
             continue;
         };
         mob_entity.post_to_brain(Box::new(|tick| {
@@ -475,7 +516,7 @@ pub fn broadcast_universal_anger(tick: &mut BrainTick<'_>) {
 
 pub fn broadcast_retreat(tick: &mut BrainTick<'_>, target: &Arc<dyn EntityBase>) {
     let visible = tick
-        .brain
+        .state
         .get(types::NEAREST_VISIBLE_ADULT_PIGLINS)
         .cloned()
         .unwrap_or_default();
@@ -484,7 +525,7 @@ pub fn broadcast_retreat(tick: &mut BrainTick<'_>, target: &Arc<dyn EntityBase>)
         if as_piglin(other.as_ref()).is_none() {
             continue;
         }
-        let Some(mob_entity) = other.as_mob_entity() else {
+        let Some(mob_entity) = other.get_mob().map(Mob::get_mob_entity) else {
             continue;
         };
         let target = Arc::clone(target);
@@ -608,7 +649,7 @@ pub fn stop_admiring_if_item_too_far_away(max_distance_to_item: i32) -> OneShot 
             }
             let body_pos = tick.mob.get_entity().pos.load();
             let still_close = tick
-                .brain
+                .state
                 .get(types::NEAREST_VISIBLE_WANTED_ITEM)
                 .is_some_and(|item| {
                     item.get_entity()
@@ -649,7 +690,7 @@ pub fn stop_admiring_if_tired_of_trying_to_reach_item(
                 return false;
             }
             let Some(time_trying) = tick
-                .brain
+                .state
                 .get(types::TIME_TRYING_TO_REACH_ADMIRE_ITEM)
                 .copied()
             else {
@@ -716,7 +757,7 @@ pub fn start_hunting_hoglin() -> OneShot {
                 return false;
             }
             let nearby = tick
-                .brain
+                .state
                 .get(types::NEAREST_VISIBLE_ADULT_PIGLINS)
                 .cloned()
                 .unwrap_or_default();
@@ -724,7 +765,7 @@ pub fn start_hunting_hoglin() -> OneShot {
                 return false;
             }
             let Some(target) = tick
-                .brain
+                .state
                 .get(types::NEAREST_VISIBLE_HUNTABLE_HOGLIN)
                 .cloned()
             else {
@@ -737,7 +778,7 @@ pub fn start_hunting_hoglin() -> OneShot {
             dont_kill_any_more_hoglins_for_a_while(tick.state, &mut rng);
             broadcast_anger_target(tick, &target);
             for other in nearby {
-                let Some(mob_entity) = other.as_mob_entity() else {
+                let Some(mob_entity) = other.get_mob().map(Mob::get_mob_entity) else {
                     continue;
                 };
                 let delay = sample(TIME_BETWEEN_HUNTS, &mut rng);
@@ -753,14 +794,10 @@ pub fn start_hunting_hoglin() -> OneShot {
 
 /// A contended lock reads as "has not hunted".
 fn other_has_hunted_recently(other: &Arc<dyn EntityBase>) -> bool {
-    let Some(mob_entity) = other.as_mob_entity() else {
+    let Some(mob_entity) = other.get_mob().map(Mob::get_mob_entity) else {
         return false;
     };
-    // Never block on another mob's brain from inside a brain tick
-    let Ok(brain) = mob_entity.brain.try_lock() else {
-        return false;
-    };
-    brain.has_memory_value(types::HUNTED_RECENTLY.id())
+    mob_entity.brain_has_memory_value(types::HUNTED_RECENTLY.id())
 }
 
 #[must_use]
@@ -913,7 +950,7 @@ pub fn stop_holding_off_hand_item(
 pub fn cancel_admiring(tick: &BrainTick<'_>, piglin: &PiglinEntity) {
     if is_admiring_item(tick.state) && !piglin.off_hand_item().is_empty() {
         let stack = take_off_hand_item(piglin);
-        piglin.get_mob_entity().spawn_at_location(stack);
+        piglin.get_entity().spawn_at_location(stack);
     }
 }
 
@@ -1003,7 +1040,7 @@ pub fn was_hurt_by(
             .set_with_expiry(types::ADMIRING_DISABLED, true, HIT_BY_PLAYER_MEMORY_TIMEOUT);
     }
     let avoid_is_other_type = tick
-        .brain
+        .state
         .get(types::AVOID_TARGET)
         .is_some_and(|avoid| avoid.get_entity().entity_type != attacker_type);
     if avoid_is_other_type {
@@ -1037,7 +1074,7 @@ pub fn was_hurt_by(
 /// Vanilla `PiglinAi.maybeRetaliate`, shared with the brute.
 pub fn maybe_retaliate(tick: &mut BrainTick<'_>, attacker: &Arc<dyn EntityBase>) {
     if tick
-        .brain
+        .state
         .is_active(pumpkin_data::environment_attribute::Activity::Avoid)
     {
         return;
@@ -1084,7 +1121,8 @@ pub fn get_barter_response_items(tick: &BrainTick<'_>) -> Vec<ItemStack> {
         return Vec::new();
     };
     let params = LootContextParameters {
-        this_entity: Some(tick.mob.get_entity().entity_type),
+        world: Some(tick.world.as_ref()),
+        this_entity: Some(tick.mob as &dyn EntityBase),
         ..Default::default()
     };
     crate::world::loot::generate_loot_from_handle(&table, rand::random(), &params)
@@ -1457,7 +1495,7 @@ fn is_dancing(mob: &dyn Mob) -> bool {
 /// Vanilla `PiglinAi.wantsToStopRiding`.
 #[must_use]
 fn wants_to_stop_riding(tick: &BrainTick<'_>, vehicle: &Arc<dyn EntityBase>) -> bool {
-    let Some(mob_entity) = vehicle.as_mob_entity() else {
+    let Some(mob_entity) = vehicle.get_mob().map(Mob::get_mob_entity) else {
         return false;
     };
     let vehicle_is_baby = is_baby_hoglin(vehicle.as_ref())
@@ -1469,10 +1507,7 @@ fn wants_to_stop_riding(tick: &BrainTick<'_>, vehicle: &Arc<dyn EntityBase>) -> 
         return true;
     }
     // Never block on another mob's brain from inside a brain tick
-    let vehicle_was_hurt = mob_entity
-        .brain
-        .try_lock()
-        .is_ok_and(|brain| brain.has_memory_value(types::HURT_BY.id()));
+    let vehicle_was_hurt = mob_entity.brain_has_memory_value(types::HURT_BY.id());
     if vehicle_was_hurt {
         return true;
     }

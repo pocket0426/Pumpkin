@@ -27,7 +27,7 @@ impl Sensor for PiglinBruteSpecificSensor {
             let ctx = tick.visibility();
             let empty = NearestVisibleLivingEntities::empty();
             let visible = ctx
-                .brain
+                .state
                 .get(types::NEAREST_VISIBLE_LIVING_ENTITIES)
                 .unwrap_or(&empty);
             visible.find_closest(&ctx, |entity: &Arc<dyn EntityBase>| {

@@ -30,7 +30,7 @@ pub fn create_with(
             };
             if !can_attack(tick.mob)
                 || is_holding_usable_non_melee_weapon(tick.mob)
-                || !utils::is_within_attack_range(tick.mob, target.as_ref())
+                || !tick.mob.get_mob_entity().is_in_attack_range(target.as_ref())
                 || !utils::entity_is_visible(&tick.visibility(), target.as_ref())
             {
                 return false;

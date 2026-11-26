@@ -34,7 +34,7 @@ pub fn back_up_if_too_close(too_close_distance: i32, strafe_speed: f32) -> OneSh
                     .squared_distance_to_vec(&body_pos)
                     < too_close_squared;
                 let visible = ctx
-                    .brain
+                    .state
                     .get(types::NEAREST_VISIBLE_LIVING_ENTITIES)
                     .is_some_and(|visible| visible.contains(target.as_ref(), &ctx));
                 (too_close && visible).then(|| Arc::clone(target))

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::block::blocks::weathering_copper;
 use crate::block::entities::BlockEntity;
 use crate::block::entities::chest::ChestBlockEntity;
-use crate::entity::mob::piglin_ai::PiglinAi;
+use crate::entity::mob::piglin_ai;
 use pumpkin_data::BlockStateId;
 use pumpkin_data::block_properties::{ChestLikeProperties, ChestType, HorizontalFacing};
 use pumpkin_data::block_transformer::{get_unwaxed, get_waxed};
@@ -396,7 +396,7 @@ fn normal_use_chest_impl(args: &NormalUseArgs<'_>) -> BlockActionResult {
             stat as i32,
             1,
         );
-        PiglinAi::anger_nearby_piglins(args.world, args.player, true);
+        piglin_ai::anger_nearby_piglins(args.world, args.player, true);
     }
 
     BlockActionResult::Success

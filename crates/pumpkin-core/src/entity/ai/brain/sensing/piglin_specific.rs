@@ -13,7 +13,7 @@ use crate::entity::EntityBase;
 use crate::entity::living::LivingEntity;
 use crate::entity::mob::hoglin::HoglinEntity;
 use crate::entity::mob::piglin::PiglinEntity;
-use crate::entity::mob::piglin_ai::PiglinAi;
+use crate::entity::mob::piglin_ai;
 use crate::entity::player::Player;
 use crate::world::World;
 
@@ -42,9 +42,9 @@ fn is_valid_repellent(block: &Block, state: &BlockState) -> bool {
 fn find_nearest_repellent(world: &World, origin: BlockPos) -> Option<BlockPos> {
     BlockPos::within_manhattan(
         origin,
-        PiglinAi::REPELLENT_DETECTION_RANGE_HORIZONTAL,
-        PiglinAi::REPELLENT_DETECTION_RANGE_VERTICAL,
-        PiglinAi::REPELLENT_DETECTION_RANGE_HORIZONTAL,
+        piglin_ai::REPELLENT_DETECTION_RANGE_HORIZONTAL,
+        piglin_ai::REPELLENT_DETECTION_RANGE_VERTICAL,
+        piglin_ai::REPELLENT_DETECTION_RANGE_HORIZONTAL,
     )
     .find(|pos| {
         let (block, state) = world.get_block_and_state(pos);
@@ -131,7 +131,7 @@ impl Sensor for PiglinSpecificSensor {
                     }
                 } else if let Some(player) = entity.get_player() {
                     if player_not_wearing_gold.is_none()
-                        && !PiglinAi::is_wearing_safe_armor(&player.living_entity)
+                        && !piglin_ai::is_wearing_safe_armor(entity.as_ref())
                         && tick.mob.can_attack(entity.as_ref())
                     {
                         player_not_wearing_gold =
@@ -139,7 +139,7 @@ impl Sensor for PiglinSpecificSensor {
                     }
                     if player_holding_wanted_item.is_none()
                         && !player.is_spectator()
-                        && PiglinAi::is_player_holding_loved_item(player)
+                        && piglin_ai::is_player_holding_loved_item(entity.as_ref())
                     {
                         player_holding_wanted_item =
                             tick.world.get_player_by_id(player.get_entity().entity_id);
@@ -149,7 +149,7 @@ impl Sensor for PiglinSpecificSensor {
                         || entity_type == &EntityType::WITHER)
                 {
                     nemesis = Some(entity.clone());
-                } else if zombified.is_none() && PiglinAi::is_zombified(entity_type) {
+                } else if zombified.is_none() && piglin_ai::is_zombified(entity.as_ref()) {
                     zombified = Some(entity.clone());
                 }
             }

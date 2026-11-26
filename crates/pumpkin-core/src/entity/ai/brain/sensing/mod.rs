@@ -56,7 +56,8 @@ pub enum SensorType {
     GolemDetected,
     AxolotlAttackables,
     ArmadilloScareDetected,
-    PiglinSpecificSensor,
+    PiglinSpecific,
+    PiglinBruteSpecific,
 }
 
 impl SensorType {
@@ -80,7 +81,8 @@ impl SensorType {
             Self::GolemDetected => "minecraft:golem_detected",
             Self::AxolotlAttackables => "minecraft:axolotl_attackables",
             Self::ArmadilloScareDetected => "minecraft:armadillo_scare_detected",
-            Self::PiglinSpecificSensor => "minecraft:piglin_specific_sensor",
+            Self::PiglinSpecific => "minecraft:piglin_specific_sensor",
+            Self::PiglinBruteSpecific => "minecraft:piglin_brute_specific_sensor",
         }
     }
 
@@ -101,7 +103,8 @@ impl SensorType {
             | Self::VillagerBabies
             | Self::VillagerHostiles
             | Self::AxolotlAttackables
-            | Self::PiglinSpecificSensor => DEFAULT_SCAN_RATE,
+            | Self::PiglinSpecific
+            | Self::PiglinBruteSpecific => DEFAULT_SCAN_RATE,
             Self::ArmadilloScareDetected => 5,
             Self::SecondaryPois => 40,
             Self::GolemDetected => 200,
@@ -129,7 +132,10 @@ impl SensorType {
             Self::ArmadilloScareDetected => {
                 Box::new(armadillo_scare_detected::ArmadilloScareDetectedSensor)
             }
-            Self::PiglinSpecificSensor => Box::new(piglin_specific::PiglinSpecificSensor),
+            Self::PiglinSpecific => Box::new(piglin_specific::PiglinSpecificSensor),
+            Self::PiglinBruteSpecific => {
+                Box::new(piglin_brute_specific::PiglinBruteSpecificSensor)
+            }
         }
     }
 

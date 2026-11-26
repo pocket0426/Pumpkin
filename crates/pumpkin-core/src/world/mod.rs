@@ -5992,7 +5992,7 @@ impl World {
         if let Some(player) = cause
             && broken_block.has_tag(&tag::Block::MINECRAFT_GUARDED_BY_PIGLINS)
         {
-            crate::entity::mob::piglin_ai::PiglinAi::anger_nearby_piglins(self, player, false);
+            crate::entity::mob::piglin_ai::anger_nearby_piglins(self, player, false);
         }
 
         let broken_block_state =

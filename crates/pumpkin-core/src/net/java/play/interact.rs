@@ -121,9 +121,7 @@ impl JavaClient {
                                 let is_baby =
                                     event.target.get_entity().age.load(Ordering::Relaxed) < 0;
                                 let player_wearing_safe_armor =
-                                    crate::entity::mob::piglin_ai::PiglinAi::is_wearing_safe_armor(
-                                        &player.living_entity,
-                                    );
+                                    crate::entity::mob::piglin_ai::is_wearing_safe_armor(player.as_ref());
                                 player.trigger_advancement(
                                     crate::entity::player::advancement::trigger::AdvancementTrigger::PlayerInteractedWithEntity {
                                         entity_type: format!(

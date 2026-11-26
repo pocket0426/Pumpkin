@@ -115,7 +115,7 @@ impl Behavior for CrossbowAttack {
         Self::able_to_attack(tick)
     }
 
-    fn can_still_use(&mut self, tick: &BrainTick<'_>) -> bool {
+    fn can_still_use(&mut self, tick: &mut BrainTick<'_>) -> bool {
         tick.state.has_memory_value(types::ATTACK_TARGET.id()) && Self::able_to_attack(tick)
     }
 
@@ -130,7 +130,7 @@ impl Behavior for CrossbowAttack {
         self.crossbow_attack(tick, &target);
     }
 
-    fn stop(&mut self, tick: &mut BrainTick<'_>) {
+    fn stop(&mut self, tick: &mut BrainTick<'_>, _timed_out: bool) {
         if is_using_item(tick.mob) {
             tick.mob.get_mob_entity().living_entity.clear_active_hand();
         }
