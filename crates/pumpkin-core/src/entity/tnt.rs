@@ -1,10 +1,11 @@
+use super::falling::{state_from_nbt_key, state_to_nbt};
 use super::{Entity, EntityBase, living::LivingEntity, projectile::owner::EntityReference};
 use crate::server::Server;
 use crate::world::World;
 use core::f32;
 use crossbeam::atomic::AtomicCell;
-use pumpkin_data::Block;
 use pumpkin_data::entity::EntityType;
+use pumpkin_data::{Block, BlockStateId};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_util::math::position::BlockPos;
@@ -23,10 +24,11 @@ use std::{
 /// Vanilla `Entity.getAirDrag`, applied every tick.
 const AIR_DRAG: f32 = 0.98;
 
-// TODO: `owner` (igniter, projectile owner or explosion source): NBT, kill credit, damage source.
-// TODO: `block_state` NBT tag and `usedPortal` damage calculator.
+// TODO: `usedPortal` damage calculator (a TNT that came through a portal spares portal blocks).
 pub struct TNTEntity {
     entity: Entity,
+    /// Vanilla `DATA_BLOCK_STATE_ID`: the block the client draws, NBT `block_state`.
+    block_state: AtomicCell<BlockStateId>,
     power: AtomicCell<f32>,
     fuse: AtomicU32,
     /// Whoever lit it, credited for the explosion.
@@ -43,9 +45,25 @@ impl TNTEntity {
         entity.blocks_building = true;
         Self {
             entity,
+            block_state: AtomicCell::new(Block::TNT.default_state.id),
             power: AtomicCell::new(power),
             fuse: AtomicU32::new(fuse),
             owner: EntityReference::none(),
+        }
+    }
+
+    #[must_use]
+    pub fn block_state(&self) -> BlockStateId {
+        self.block_state.load()
+    }
+
+    /// Only the look changes: whatever it shows, it explodes like TNT.
+    pub fn set_block_state(&self, state: BlockStateId) {
+        if self.block_state.swap(state) != state {
+            self.entity.set_synced_data(
+                pumpkin_data::tracked_data::tnt::BLOCK_STATE_ID,
+                VarInt(i32::from(state.as_u16())),
+            );
         }
     }
 
@@ -92,6 +110,7 @@ impl EntityBase for TNTEntity {
     /// nearly-detonated fuse and the TNT explodes late.
     fn write_custom_nbt(&self, nbt: &mut NbtCompound) {
         nbt.put_short("fuse", self.fuse.load(Relaxed) as i16);
+        nbt.put_compound("block_state", state_to_nbt(self.block_state.load()));
         let power = self.power.load();
         if (power - Self::DEFAULT_POWER).abs() > f32::EPSILON {
             nbt.put_float("explosion_power", power);
@@ -105,6 +124,9 @@ impl EntityBase for TNTEntity {
             .get_numeric_short("fuse")
             .map_or(Self::DEFAULT_FUSE, |fuse| fuse.max(0) as u32);
         self.fuse.store(fuse, Relaxed);
+        self.set_block_state(
+            state_from_nbt_key(nbt, "block_state").unwrap_or(Block::TNT.default_state.id),
+        );
         self.power.store(
             nbt.get_numeric_float("explosion_power")
                 .unwrap_or(Self::DEFAULT_POWER)
@@ -169,7 +191,7 @@ impl EntityBase for TNTEntity {
         );
         self.entity.set_synced_data(
             pumpkin_data::tracked_data::tnt::BLOCK_STATE_ID,
-            VarInt(i32::from(Block::TNT.default_state.id.as_u16())),
+            VarInt(i32::from(self.block_state.load().as_u16())),
         );
     }
 
@@ -204,5 +226,48 @@ impl EntityBase for TNTEntity {
 
     fn cast_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::ai::test_support::world;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[tokio::test]
+    async fn displayed_block_is_saved_and_defaults_to_tnt() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let tnt = |world: &Arc<World>| {
+            TNTEntity::new(
+                Entity::new(
+                    world.clone(),
+                    Vector3::new(0.5, 64.0, 0.5),
+                    &EntityType::TNT,
+                ),
+                TNTEntity::DEFAULT_POWER,
+                TNTEntity::DEFAULT_FUSE,
+            )
+        };
+        let disguised = tnt(&world);
+        disguised.set_block_state(Block::DIAMOND_BLOCK.default_state.id);
+        let mut saved = NbtCompound::new();
+        disguised.write_custom_nbt(&mut saved);
+
+        let loaded = tnt(&world);
+        let fresh = loaded.block_state();
+        loaded.read_custom_nbt(&saved);
+        let restored = loaded.block_state();
+        // No tag, or a block that does not exist: plain TNT.
+        loaded.read_custom_nbt(&NbtCompound::new());
+        let fallback = loaded.block_state();
+        world.level.shutdown().await;
+
+        assert_eq!(fresh, Block::TNT.default_state.id);
+        assert_eq!(restored, Block::DIAMOND_BLOCK.default_state.id);
+        assert_eq!(fallback, Block::TNT.default_state.id);
+        Ok(())
     }
 }

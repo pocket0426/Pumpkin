@@ -43,7 +43,8 @@ const TIME_OUT_OF_WORLD: i32 = 100;
 /// Vanilla `FallingBlockEntity.tick`: drop after this many ticks while still falling.
 const TIME_MAX: i32 = 600;
 
-fn state_to_nbt(state_id: BlockStateId) -> NbtCompound {
+/// A block state as vanilla's `BlockState.CODEC` writes it.
+pub(crate) fn state_to_nbt(state_id: BlockStateId) -> NbtCompound {
     let block = Block::from_state_id(state_id);
     let properties = block
         .properties(state_id)
@@ -52,12 +53,17 @@ fn state_to_nbt(state_id: BlockStateId) -> NbtCompound {
     PaletteEntry::with_properties(block.to_resource_location(), properties).to_nbt_compound()
 }
 
-/// Vanilla falls back to sand when `BlockState` is missing or unknown.
-fn state_from_nbt(nbt: &NbtCompound) -> BlockStateId {
-    nbt.get_compound("BlockState")
+/// The block state under `key`, if there is one and it names a known block.
+pub(crate) fn state_from_nbt_key(nbt: &NbtCompound, key: &str) -> Option<BlockStateId> {
+    nbt.get_compound(key)
         .and_then(|state| PaletteEntry::from_nbt_compound(state).ok())
         .and_then(|entry| BlockStateResolver::resolve_simple(&entry))
-        .map_or(Block::SAND.default_state.id, |state| state.id)
+        .map(|state| state.id)
+}
+
+/// Vanilla falls back to sand when `BlockState` is missing or unknown.
+fn state_from_nbt(nbt: &NbtCompound) -> BlockStateId {
+    state_from_nbt_key(nbt, "BlockState").unwrap_or(Block::SAND.default_state.id)
 }
 
 pub struct FallingEntity {
