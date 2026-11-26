@@ -349,6 +349,29 @@ cargo run --locked -p pumpkin-tester      # 게임 테스트 전체 (약 1분 + 
 
 참고: `piston_extension.rs`의 "TODO: use player"는 바닐라에 해당하는 동작이 없습니다(`MovingPistonBlock.destroy`는 플레이어 없이 블록만 제거). 그대로 둡니다.
 
+### 18. 2차 목록 — 진행 중
+
+1~9가 끝나서 `block/`에 남은 TODO 21개를 다시 훑어 다음 목록을 정했습니다.
+
+| 순서 | 항목 | 위치 | 상태 |
+|---|---|---|---|
+| 10 | 종: 주민에게 들린 시각 기록, 약탈자 발광, 클라이언트 흔들림 | `entities/bell.rs`, `redstone/bell.rs` | **완료** |
+| 11 | 철사 가위 내구도 TODO | `redstone/tripwire.rs` | **정리** (바닐라에 없는 동작, 주석만 교체) |
+| 12 | 주크박스 `setTheItem` 순서 (아이템 → `HAS_RECORD` → 재생/정지) | `entities/jukebox.rs` | 대기 |
+| 13 | 스포너·시련 스포너의 `SpawnData` NBT 적용 | `entities/mob_spawner.rs`, `trial_spawner.rs` | 대기 |
+| 14 | 용기의 전리품 표 풀기 누락분 (통·셜커 상자·발사기·공급기·호퍼, 장식된 도자기) | `entities/mod.rs`, `hopper.rs`, `decorated_pot.rs` | 대기 |
+| 15 | 용기 잠금(`lock` 컴포넌트) | `blocks/chests.rs` | 대기 |
+
+10번 세부 (`BellBlockEntity` 26.3 바이트코드):
+- 종을 치면 블록 이벤트(종류 1, 방향)를 큐에 넣습니다. 클라이언트는 이 이벤트로 종을 흔듭니다(이전에는 보내지 않았음).
+- 이벤트 처리에서 반경 48의 생물을 찾고(최대 3초에 한 번), 32 안의 살아 있는 생물의 Brain에 `HEARD_BELL_TIME`을 씁니다. 이 기억을 등록한 것은 주민뿐입니다.
+- 흔들림 5틱 뒤 32 안에 약탈자(`raiders` 태그)가 있으면 공명음을 내고, 40틱 뒤 48 안의 약탈자에게 발광 3초를 겁니다.
+- 주민은 자기 Brain 틱 안에서 종을 치기 때문에, 탐색을 이벤트로 미루지 않으면 자기 Brain을 다시 잠그게 됩니다. 바닐라도 같은 순서(큐 → 다음에 처리)입니다.
+- Brain을 쓰지 않는 몹에 Brain을 새로 만들지 않도록 `with_existing_brain`을 추가했습니다.
+- 테스트: 봇 `bot:bell_ring_alerts_villagers_and_reveals_raiders`.
+
+게임 안에서 확인할 것: 종을 치면 흔들리는지, 근처 주민이 집으로 숨는지, 습격 중 종을 치면 약탈자가 발광하는지.
+
 ## 규칙 메모 (저장소 `AGENTS.md`, `CONTRIBUTING.md`)
 - 바닐라 동작은 디컴파일한 소스 기준으로 맞춘다. 위키나 기억 금지.
 - 수치는 하드코딩하지 않고 `pumpkin-data` 생성값 사용.

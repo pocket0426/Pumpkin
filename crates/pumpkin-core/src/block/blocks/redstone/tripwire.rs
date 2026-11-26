@@ -105,7 +105,7 @@ impl BlockBehaviour for TripwireBlock {
                 pumpkin_data::game_event::GameEvent::Shear.name(),
                 args.position.to_centered_f64(),
             );
-            // TODO: Deduct 1 durability from held shears (skip in Creative mode).
+            // The shears wear down in `ShearsItem.mineBlock`, not here
         }
     }
 

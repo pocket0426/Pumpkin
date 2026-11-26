@@ -767,6 +767,16 @@ impl MobEntity {
             .unwrap_or(false)
     }
 
+    /// Runs `callback` on the brain when the mob already has one, without making one for a mob
+    /// that never uses its brain. Must not be called from inside this mob's own brain tick.
+    pub fn with_existing_brain<R>(&self, callback: impl FnOnce(&mut Brain) -> R) -> Option<R> {
+        self.brain
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+            .map(callback)
+    }
+
     pub fn with_brain<R>(&self, mob: &dyn Mob, callback: impl FnOnce(&mut Brain) -> R) -> R {
         let result = {
             let mut slot = self

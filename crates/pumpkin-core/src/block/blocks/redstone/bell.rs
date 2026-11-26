@@ -5,8 +5,8 @@ use crate::block::entities::bell::BellBlockEntity;
 use crate::block::registry::BlockActionResult;
 use crate::block::{
     BlockBehaviour, BlockHitResult, BrokenArgs, CanPlaceAtArgs, GetStateForNeighborUpdateArgs,
-    NormalUseArgs, OnNeighborUpdateArgs, OnPlaceArgs, OnProjectileHitArgs, PathComputationType,
-    PlacedArgs,
+    NormalUseArgs, OnNeighborUpdateArgs, OnPlaceArgs, OnProjectileHitArgs, OnSyncedBlockEventArgs,
+    PathComputationType, PlacedArgs,
 };
 use crate::entity::EntityBase;
 use crate::world::World;
@@ -20,7 +20,10 @@ use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::world::{BlockAccessor, BlockFlags};
 
-pub(crate) fn ring_bell(
+/// Vanilla `BellBlockEntity.triggerEvent` type for a ring.
+const RING_EVENT_TYPE: u8 = 1;
+
+pub fn ring_bell(
     position: BlockPos,
     world: &Arc<World>,
     hit_direction: Option<HorizontalFacing>,
@@ -49,6 +52,14 @@ pub(crate) fn ring_bell(
         && let Some(be) = block_entity.as_any().downcast_ref::<BellBlockEntity>()
     {
         be.activate(direction);
+        // Vanilla `onHit` queues a block event: it swings the bell on the clients, and the
+        // listener search runs from it, outside whatever rang the bell (a villager rings from
+        // inside its own brain tick).
+        world.add_synced_block_event(
+            position,
+            RING_EVENT_TYPE,
+            direction.to_block_direction().to_index(),
+        );
     }
 
     world.play_sound_fine(
@@ -123,6 +134,20 @@ impl BlockBehaviour for BellBlock {
             .direction
             .unwrap_or_else(|| self.get_direction(args.state.id, args.block).opposite());
         self.can_survive_dir(args.block_accessor, args.position, direction)
+    }
+
+    fn on_synced_block_event(&self, args: OnSyncedBlockEventArgs<'_>) -> bool {
+        if args.r#type != RING_EVENT_TYPE {
+            return false;
+        }
+        if let Some(block_entity) = args.world.get_block_entity(args.position)
+            && let Some(bell) = block_entity.as_any().downcast_ref::<BellBlockEntity>()
+        {
+            let direction = BlockDirection::by_index(usize::from(args.data))
+                .and_then(|direction| direction.to_horizontal_facing());
+            bell.on_ring_event(args.world, direction);
+        }
+        true
     }
 
     fn broken(&self, args: BrokenArgs<'_>) {
