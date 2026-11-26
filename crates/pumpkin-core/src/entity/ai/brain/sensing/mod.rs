@@ -18,6 +18,7 @@ pub mod nearest_bed;
 pub mod nearest_items;
 pub mod nearest_living_entities;
 pub mod nearest_players;
+pub mod piglin_specific;
 pub mod secondary_pois;
 pub mod tempting;
 pub mod villager_babies;
@@ -54,6 +55,7 @@ pub enum SensorType {
     GolemDetected,
     AxolotlAttackables,
     ArmadilloScareDetected,
+    PiglinSpecificSensor,
 }
 
 impl SensorType {
@@ -77,6 +79,7 @@ impl SensorType {
             Self::GolemDetected => "minecraft:golem_detected",
             Self::AxolotlAttackables => "minecraft:axolotl_attackables",
             Self::ArmadilloScareDetected => "minecraft:armadillo_scare_detected",
+            Self::PiglinSpecificSensor => "minecraft:piglin_specific_sensor",
         }
     }
 
@@ -96,7 +99,8 @@ impl SensorType {
             | Self::NearestBed
             | Self::VillagerBabies
             | Self::VillagerHostiles
-            | Self::AxolotlAttackables => DEFAULT_SCAN_RATE,
+            | Self::AxolotlAttackables
+            | Self::PiglinSpecificSensor => DEFAULT_SCAN_RATE,
             Self::ArmadilloScareDetected => 5,
             Self::SecondaryPois => 40,
             Self::GolemDetected => 200,
@@ -124,6 +128,7 @@ impl SensorType {
             Self::ArmadilloScareDetected => {
                 Box::new(armadillo_scare_detected::ArmadilloScareDetectedSensor)
             }
+            Self::PiglinSpecificSensor => Box::new(piglin_specific::PiglinSpecificSensor),
         }
     }
 

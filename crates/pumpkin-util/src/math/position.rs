@@ -243,6 +243,30 @@ impl BlockPos {
         Self::new(a.0.x.max(b.0.x), a.0.y.max(b.0.y), a.0.z.max(b.0.z))
     }
 
+    /// Vanilla `BlockPos.withinManhattan`: every position in the box around `origin`, nearest first by
+    /// Manhattan distance.
+    pub fn within_manhattan(
+        origin: Self,
+        reach_x: i32,
+        reach_y: i32,
+        reach_z: i32,
+    ) -> impl Iterator<Item = Self> {
+        (0..=reach_x + reach_y + reach_z).flat_map(move |depth| {
+            let max_x = reach_x.min(depth);
+            (-max_x..=max_x).flat_map(move |x| {
+                let max_y = reach_y.min(depth - x.abs());
+                (-max_y..=max_y).flat_map(move |y| {
+                    let z = depth - x.abs() - y.abs();
+                    let in_reach = z <= reach_z;
+                    let near = in_reach.then(|| origin.offset(Vector3::new(x, y, z)));
+                    let mirrored =
+                        (in_reach && z != 0).then(|| origin.offset(Vector3::new(x, y, -z)));
+                    near.into_iter().chain(mirrored)
+                })
+            })
+        })
+    }
+
     /// Iterates through all `BlockPos` within a cuboid region defined by two corner points.
     #[must_use]
     pub fn iterate(start: Self, end: Self) -> BlockPosIterator {
@@ -843,6 +867,40 @@ mod test {
     use pumpkin_codecs::{assert_decode, assert_encode_success};
     use pumpkin_nbt::nbt_ops::NbtOps;
     use pumpkin_nbt::tag::NbtTag;
+
+    #[test]
+    fn within_manhattan_follows_the_vanilla_order() {
+        let offsets = |positions: Vec<BlockPos>| -> Vec<[i32; 3]> {
+            positions
+                .iter()
+                .map(|pos| [pos.0.x, pos.0.y, pos.0.z])
+                .collect()
+        };
+        // Depth by depth, x then y ascending, positive z before its mirror.
+        let nearest: Vec<BlockPos> = BlockPos::within_manhattan(BlockPos::ZERO, 8, 4, 8)
+            .take(9)
+            .collect();
+        assert_eq!(
+            offsets(nearest),
+            [
+                [0, 0, 0],
+                [-1, 0, 0],
+                [0, -1, 0],
+                [0, 0, 1],
+                [0, 0, -1],
+                [0, 1, 0],
+                [1, 0, 0],
+                [-2, 0, 0],
+                [-1, -1, 0],
+            ]
+        );
+
+        let all: Vec<BlockPos> =
+            BlockPos::within_manhattan(BlockPos::new(3, 70, -5), 8, 4, 8).collect();
+        assert_eq!(all.len(), 17 * 9 * 17);
+        let unique: std::collections::HashSet<[i32; 3]> = offsets(all).into_iter().collect();
+        assert_eq!(unique.len(), 17 * 9 * 17);
+    }
 
     #[test]
     fn codec() {
