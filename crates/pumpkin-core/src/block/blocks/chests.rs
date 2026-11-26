@@ -43,8 +43,6 @@ use crate::world::World;
 use crate::world::loot::{LootContextParameters, generate_loot_from_handle};
 use pumpkin_data::BlockState;
 
-// TODO vanilla `BaseContainerBlockEntity.canOpen`: the `lock` component, with `container.isLocked` and the
-// `CHEST_LOCKED` sound on a failed open.
 struct ChestScreenFactory {
     inventory: Arc<dyn Inventory>,
     loot_pending: bool,
@@ -205,13 +203,21 @@ impl Drop for LootEventDispatch {
     }
 }
 
-/// Vanilla `RandomizableContainer.unpackLootTable`: fills the chest from its pending loot table once.
-fn unpack_loot_table(world: &World, entity: &Arc<dyn BlockEntity>, player: Option<&Player>) {
+/// Vanilla `RandomizableContainer.unpackLootTable`: fills the container from its pending loot table once.
+pub(crate) fn unpack_loot_table(
+    world: &World,
+    entity: &Arc<dyn BlockEntity>,
+    player: Option<&Player>,
+) {
     // Fired before the loot lock -> a handler reading this chest would unpack it again.
     // A cancel still clears the key, the chest just stays empty.
     // TODO let `LootGenerateEvent` carry the container, context and generated items so a plugin can edit the loot.
     // TODO concurrent first unpacks on different threads each fire the event, only the one that takes the
     // key decides. One event per unpack needs an "unpacking" loot state that other threads wait on.
+    // The common case costs one check: nothing is packed
+    if !entity.has_loot_table() {
+        return;
+    }
     let chest = (std::ptr::from_ref(world) as usize, entity.get_position());
     // A handler reading this chest lands here again: it stays packed, the outer call decides.
     if LOOT_EVENT_DISPATCH.with_borrow(|chests| chests.contains(&chest)) {

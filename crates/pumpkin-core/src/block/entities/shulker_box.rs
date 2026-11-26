@@ -42,6 +42,7 @@ pub struct ShulkerBoxBlockEntity {
     // Viewer
     pub viewers: ViewerCountTracker,
     pub metadata: super::ContainerMetadata,
+    pub loot: super::PendingLoot,
 
     animation_status: AtomicCell<AnimationStatus>,
     progress: AtomicCell<f32>,
@@ -67,23 +68,28 @@ impl BlockEntity for ShulkerBoxBlockEntity {
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
             metadata: super::ContainerMetadata::from_nbt(nbt),
+            loot: super::PendingLoot::from_nbt(nbt),
             animation_status: AtomicCell::new(AnimationStatus::Closed),
             progress: AtomicCell::new(0.0),
         };
 
-        pumpkin_inventory::sync_read_items_from_nbt(
-            nbt,
-            shulker_box
-                .items
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        if !shulker_box.loot.is_pending() {
+            pumpkin_inventory::sync_read_items_from_nbt(
+                nbt,
+                shulker_box
+                    .items
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
 
         shulker_box
     }
 
     fn write_nbt(&self, nbt: &mut NbtCompound) {
-        self.write_inventory_nbt(nbt, true);
+        if !self.loot.write_nbt(nbt) {
+            self.write_inventory_nbt(nbt, true);
+        }
         self.metadata.write_nbt(nbt);
     }
 
@@ -104,6 +110,7 @@ impl BlockEntity for ShulkerBoxBlockEntity {
 
     fn collect_item_components(&self, stack: &mut ItemStack) {
         self.metadata.collect_item_components(stack);
+        self.loot.collect_item_components(stack);
         let items = self
             .items
             .read()
@@ -122,6 +129,7 @@ impl BlockEntity for ShulkerBoxBlockEntity {
 
     fn apply_item_components(&self, stack: &ItemStack) {
         self.metadata.apply_item_components(stack);
+        self.loot.apply_item_components(stack);
         if let Some(container) = stack.get_data_component::<ContainerImpl>() {
             let mut items = self
                 .items
@@ -136,6 +144,8 @@ impl BlockEntity for ShulkerBoxBlockEntity {
         }
         self.mark_dirty();
     }
+
+    super::pending_loot_hooks!();
 
     fn get_lock(&self) -> Option<pumpkin_data::data_component_impl::LockImpl> {
         self.metadata.get_lock()
@@ -229,6 +239,7 @@ impl ShulkerBoxBlockEntity {
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
             metadata: super::ContainerMetadata::default(),
+            loot: super::PendingLoot::default(),
             animation_status: AtomicCell::new(AnimationStatus::Closed),
             progress: AtomicCell::new(0.0),
         }

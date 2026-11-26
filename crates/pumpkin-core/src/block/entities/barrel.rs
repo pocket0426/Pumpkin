@@ -31,6 +31,7 @@ pub struct BarrelBlockEntity {
     // Viewer
     viewers: ViewerCountTracker,
     pub metadata: super::ContainerMetadata,
+    pub loot: super::PendingLoot,
 }
 
 impl BlockEntity for BarrelBlockEntity {
@@ -53,26 +54,32 @@ impl BlockEntity for BarrelBlockEntity {
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
             metadata: super::ContainerMetadata::from_nbt(nbt),
+            loot: super::PendingLoot::from_nbt(nbt),
         };
 
-        pumpkin_inventory::sync_read_items_from_nbt(
-            nbt,
-            barrel
-                .items
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        if !barrel.loot.is_pending() {
+            pumpkin_inventory::sync_read_items_from_nbt(
+                nbt,
+                barrel
+                    .items
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
 
         barrel
     }
 
     fn write_nbt(&self, nbt: &mut NbtCompound) {
-        self.write_inventory_nbt(nbt, true);
+        if !self.loot.write_nbt(nbt) {
+            self.write_inventory_nbt(nbt, true);
+        }
         self.metadata.write_nbt(nbt);
     }
 
     fn apply_item_components(&self, stack: &ItemStack) {
         self.metadata.apply_item_components(stack);
+        self.loot.apply_item_components(stack);
         let mut items = self
             .items
             .write()
@@ -92,6 +99,8 @@ impl BlockEntity for BarrelBlockEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         super::collect_container_items_from_slice(&*items, stack);
     }
+
+    super::pending_loot_hooks!();
 
     fn get_lock(&self) -> Option<pumpkin_data::data_component_impl::LockImpl> {
         self.metadata.get_lock()
@@ -175,6 +184,7 @@ impl BarrelBlockEntity {
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
             metadata: super::ContainerMetadata::default(),
+            loot: super::PendingLoot::default(),
         }
     }
 
@@ -296,5 +306,63 @@ impl Clearable for BarrelBlockEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         items.fill_with(|| ItemStack::EMPTY.clone());
         self.mark_dirty();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::item::Item;
+
+    use super::*;
+
+    const TABLE: &str = "minecraft:chests/village/village_fisher";
+
+    fn packed_barrel() -> BarrelBlockEntity {
+        let mut nbt = NbtCompound::new();
+        nbt.put_string("LootTable", TABLE.to_string());
+        nbt.put_long("LootTableSeed", 7);
+        BarrelBlockEntity::from_nbt(&nbt, BlockPos::ZERO)
+    }
+
+    fn saved(barrel: &BarrelBlockEntity) -> NbtCompound {
+        let mut nbt = NbtCompound::new();
+        barrel.write_nbt(&mut nbt);
+        nbt
+    }
+
+    #[test]
+    fn packed_barrel_saves_its_table_instead_of_items() {
+        let barrel = packed_barrel();
+        let nbt = saved(&barrel);
+
+        assert!(barrel.has_loot_table());
+        assert_eq!(barrel.loot_table_key().as_deref(), Some(TABLE));
+        assert_eq!(nbt.get_string("LootTable"), Some(TABLE));
+        assert_eq!(nbt.get_long("LootTableSeed"), Some(7));
+        assert!(nbt.get("Items").is_none());
+    }
+
+    #[test]
+    fn unpacking_fills_the_barrel_once_and_forgets_the_table() {
+        let barrel = packed_barrel();
+        let mut calls = Vec::new();
+        for _ in 0..2 {
+            barrel.unpack_loot_table_with(&mut |key, seed| {
+                calls.push((key, seed));
+                vec![ItemStack::new(3, &Item::COD)]
+            });
+        }
+        let cod: u32 = (0..barrel.size())
+            .map(|slot| barrel.get_stack(slot))
+            .filter(|stack| stack.item.id == Item::COD.id)
+            .map(|stack| u32::from(stack.item_count))
+            .sum();
+        let nbt = saved(&barrel);
+
+        assert_eq!(calls, vec![(TABLE.to_string(), 7)]);
+        assert!(!barrel.has_loot_table());
+        assert_eq!(cod, 3);
+        assert!(nbt.get("LootTable").is_none());
+        assert!(nbt.get("Items").is_some());
     }
 }

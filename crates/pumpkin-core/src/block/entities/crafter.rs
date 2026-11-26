@@ -25,15 +25,18 @@ pub struct CrafterBlockEntity {
     pub dirty: AtomicBool,
     pub comparator_dirty: AtomicBool,
     pub metadata: super::ContainerMetadata,
+    pub loot: super::PendingLoot,
 }
 
 impl BlockEntity for CrafterBlockEntity {
     fn write_nbt(&self, nbt: &mut NbtCompound) {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        sync_write_items_to_nbt(items.as_slice(), nbt);
+        if !self.loot.write_nbt(nbt) {
+            let items = self
+                .items
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            sync_write_items_to_nbt(items.as_slice(), nbt);
+        }
         nbt.put_int(
             "crafting_ticks_remaining",
             self.crafting_ticks_remaining.load(Ordering::Relaxed),
@@ -74,15 +77,18 @@ impl BlockEntity for CrafterBlockEntity {
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             metadata: super::ContainerMetadata::from_nbt(nbt),
+            loot: super::PendingLoot::from_nbt(nbt),
         };
 
-        sync_read_items_from_nbt(
-            nbt,
-            crafter
-                .items
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        if !crafter.loot.is_pending() {
+            sync_read_items_from_nbt(
+                nbt,
+                crafter
+                    .items
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
 
         if let Some(NbtTag::IntArray(disabled)) = nbt.get("disabled_slots") {
             let disabled_array = crafter
@@ -199,6 +205,7 @@ impl BlockEntity for CrafterBlockEntity {
 
     fn apply_item_components(&self, stack: &ItemStack) {
         self.metadata.apply_item_components(stack);
+        self.loot.apply_item_components(stack);
         let mut items = self
             .items
             .write()
@@ -214,6 +221,8 @@ impl BlockEntity for CrafterBlockEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         super::collect_container_items_from_slice(&*items, stack);
     }
+
+    super::pending_loot_hooks!();
 
     fn get_lock(&self) -> Option<pumpkin_data::data_component_impl::LockImpl> {
         self.metadata.get_lock()
@@ -243,6 +252,7 @@ impl CrafterBlockEntity {
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             metadata: super::ContainerMetadata::default(),
+            loot: super::PendingLoot::default(),
         }
     }
 

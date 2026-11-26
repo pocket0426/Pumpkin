@@ -6992,6 +6992,23 @@ impl Player {
             }
         }
 
+        // Vanilla `RandomizableContainerBlockEntity.createMenu`: the first to look inside
+        // generates the loot. A spectator must not, so a packed container stays shut for them.
+        if let Some(pos) = block_pos
+            && let Some(be) = self.world().get_block_entity(&pos)
+            && be.has_loot_table()
+        {
+            if self.gamemode.load() == GameMode::Spectator {
+                self.send_system_message_raw(
+                    &TextComponent::translate("container.spectatorCantOpen", [])
+                        .color_named(NamedColor::Red),
+                    true,
+                );
+                return None;
+            }
+            crate::block::blocks::chests::unpack_loot_table(&self.world(), &be, Some(self));
+        }
+
         self.increment_screen_handler_sync_id();
 
         if let Some(screen_handler) = screen_handler_factory.create_screen_handler(

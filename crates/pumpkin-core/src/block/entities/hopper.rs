@@ -43,6 +43,7 @@ pub struct HopperBlockEntity {
     /// can arrive from different workers, and both must see the other's cooldown.
     move_lock: std::sync::Mutex<()>,
     pub metadata: super::ContainerMetadata,
+    pub loot: super::PendingLoot,
 }
 
 #[must_use]
@@ -73,7 +74,9 @@ impl BlockEntity for HopperBlockEntity {
             "TransferCooldown",
             NbtTag::Int(self.cooldown_time.load(Ordering::Relaxed)),
         );
-        self.write_inventory_nbt(nbt, true);
+        if !self.loot.write_nbt(nbt) {
+            self.write_inventory_nbt(nbt, true);
+        }
         self.metadata.write_nbt(nbt);
     }
 
@@ -93,15 +96,18 @@ impl BlockEntity for HopperBlockEntity {
             ticked_game_time: AtomicI64::new(0),
             move_lock: std::sync::Mutex::new(()),
             metadata: super::ContainerMetadata::from_nbt(nbt),
+            loot: super::PendingLoot::from_nbt(nbt),
         };
 
-        pumpkin_inventory::sync_read_items_from_nbt(
-            nbt,
-            hopper
-                .items
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        if !hopper.loot.is_pending() {
+            pumpkin_inventory::sync_read_items_from_nbt(
+                nbt,
+                hopper
+                    .items
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
 
         hopper
     }
@@ -177,6 +183,7 @@ impl BlockEntity for HopperBlockEntity {
 
     fn apply_item_components(&self, stack: &ItemStack) {
         self.metadata.apply_item_components(stack);
+        self.loot.apply_item_components(stack);
         let mut items = self
             .items
             .write()
@@ -196,6 +203,8 @@ impl BlockEntity for HopperBlockEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         super::collect_container_items_from_slice(&*items, stack);
     }
+
+    super::pending_loot_hooks!();
 
     fn get_lock(&self) -> Option<pumpkin_data::data_component_impl::LockImpl> {
         self.metadata.get_lock()
@@ -225,6 +234,7 @@ impl HopperBlockEntity {
             ticked_game_time: AtomicI64::new(0),
             move_lock: std::sync::Mutex::new(()),
             metadata: super::ContainerMetadata::default(),
+            loot: super::PendingLoot::default(),
         }
     }
 
@@ -283,8 +293,8 @@ impl HopperBlockEntity {
             DecoratedPotBlockEntity::unpack_loot_table(&pot, world);
             pot.get_container()
         } else {
-            // TODO vanilla `RandomizableContainerBlockEntity.getItem` unpacks barrels, shulker boxes,
-            // dispensers, droppers, hoppers and crafters. Only chests unpack in `chest_container`.
+            // Vanilla `RandomizableContainerBlockEntity.getItem` unpacks before any slot access
+            crate::block::blocks::chests::unpack_loot_table(world, &entity, None);
             entity.get_container()
         }
     }

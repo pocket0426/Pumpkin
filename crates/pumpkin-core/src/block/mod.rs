@@ -693,10 +693,10 @@ pub fn can_support_center(
 /// entity's own inventory as a comparator would.
 #[must_use]
 pub fn container_comparator_output(args: &GetComparatorOutputArgs<'_>) -> Option<u8> {
-    let inventory = args
-        .world
-        .get_block_entity(args.position)?
-        .get_inventory()?;
+    let entity = args.world.get_block_entity(args.position)?;
+    // Vanilla reads every slot through `getItem`, which unpacks pending loot first
+    blocks::chests::unpack_loot_table(args.world, &entity, None);
+    let inventory = entity.get_inventory()?;
     Some(calculate_comparator_output(inventory.as_ref()))
 }
 

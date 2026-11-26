@@ -125,6 +125,7 @@ impl CrafterBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return;
         };
+        crate::block::blocks::chests::unpack_loot_table(world, &block_entity, None);
         let Some(crafter) = block_entity.as_any().downcast_ref::<CrafterBlockEntity>() else {
             return;
         };

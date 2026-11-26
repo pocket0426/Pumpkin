@@ -359,8 +359,8 @@ cargo run --locked -p pumpkin-tester      # 게임 테스트 전체 (약 1분 + 
 | 11 | 철사 가위 내구도 TODO | `redstone/tripwire.rs` | **정리** (바닐라에 없는 동작, 주석만 교체) |
 | 12 | 주크박스 `setTheItem` 순서 (아이템 → `HAS_RECORD` → 재생/정지) | `entities/jukebox.rs` | 대기 |
 | 13 | 스포너·시련 스포너의 `SpawnData` NBT 적용 | `entities/mob_spawner.rs`, `trial_spawner.rs` | 대기 |
-| 14 | 용기의 전리품 표 풀기 누락분 (통·셜커 상자·발사기·공급기·호퍼, 장식된 도자기) | `entities/mod.rs`, `hopper.rs`, `decorated_pot.rs` | 대기 |
-| 15 | 용기 잠금(`lock` 컴포넌트) | `blocks/chests.rs` | 대기 |
+| 14 | 용기의 전리품 표 풀기 누락분 (통·셜커 상자·발사기·공급기·호퍼·제작기) | `entities/*.rs`, `player.rs`, `world/mod.rs` | **완료** |
+| 15 | 용기 잠금(`lock` 컴포넌트) | `blocks/chests.rs` | **정리** (`Player::open_handled_screen`에 이미 구현돼 있어 낡은 주석만 삭제) |
 
 10번 세부 (`BellBlockEntity` 26.3 바이트코드):
 - 종을 치면 블록 이벤트(종류 1, 방향)를 큐에 넣습니다. 클라이언트는 이 이벤트로 종을 흔듭니다(이전에는 보내지 않았음).
@@ -371,6 +371,16 @@ cargo run --locked -p pumpkin-tester      # 게임 테스트 전체 (약 1분 + 
 - 테스트: 봇 `bot:bell_ring_alerts_villagers_and_reveals_raiders`.
 
 게임 안에서 확인할 것: 종을 치면 흔들리는지, 근처 주민이 집으로 숨는지, 습격 중 종을 치면 약탈자가 발광하는지.
+
+14번 세부 (`RandomizableContainerBlockEntity`):
+- 이전에는 상자만 전리품 표를 가졌습니다. 통·발사기·공급기·셜커 상자·호퍼·제작기는 `LootTable` NBT를 읽지 않아, 구조물로 생성된 통(어부 집 등)이나 발사기(정글 사원)가 비어 있었고 저장하면 표 자체가 사라졌습니다.
+- 공용 `PendingLoot`(표 이름 + 시드)를 만들어 여섯 블록 엔티티에 넣었습니다. 표가 남아 있는 동안에는 아이템 대신 표를 저장합니다.
+- 바닐라가 슬롯을 들여다보는 모든 자리에서 풉니다: 플레이어가 열 때, 호퍼가 접근할 때, 비교기가 읽을 때, 발사기·공급기·제작기가 작동할 때, 블록이 부서지거나 교체될 때.
+- 관전자는 풀지 못하고 열리지도 않습니다(`container.spectatorCantOpen`).
+- 풀기 함수는 표가 없으면 맨 앞에서 바로 돌아오므로 호퍼·비교기 경로의 비용은 검사 한 번입니다.
+- 테스트: 단위 2개(`packed_barrel_saves_its_table_instead_of_items`, `unpacking_fills_the_barrel_once_and_forgets_the_table`), 봇 `bot:barrel_loot_table_unpacks_for_first_player`.
+
+게임 안에서 확인할 것: 마을 어부 집의 통, 정글 사원 발사기에 내용물이 있는지. `/setblock ~ ~ ~ barrel{LootTable:"minecraft:chests/simple_dungeon"}`로 만든 통을 열면 채워지는지, 열기 전에 부수면 전리품이 떨어지는지.
 
 ## 규칙 메모 (저장소 `AGENTS.md`, `CONTRIBUTING.md`)
 - 바닐라 동작은 디컴파일한 소스 기준으로 맞춘다. 위키나 기억 금지.

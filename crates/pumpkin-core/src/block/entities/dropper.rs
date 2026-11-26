@@ -16,11 +16,14 @@ pub struct DropperBlockEntity {
     pub dirty: AtomicBool,
     pub comparator_dirty: AtomicBool,
     pub metadata: super::ContainerMetadata,
+    pub loot: super::PendingLoot,
 }
 
 impl BlockEntity for DropperBlockEntity {
     fn write_nbt(&self, nbt: &mut NbtCompound) {
-        self.write_inventory_nbt(nbt, true);
+        if !self.loot.write_nbt(nbt) {
+            self.write_inventory_nbt(nbt, true);
+        }
         self.metadata.write_nbt(nbt);
     }
 
@@ -34,21 +37,25 @@ impl BlockEntity for DropperBlockEntity {
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             metadata: super::ContainerMetadata::from_nbt(nbt),
+            loot: super::PendingLoot::from_nbt(nbt),
         };
 
-        pumpkin_inventory::sync_read_items_from_nbt(
-            nbt,
-            dropper
-                .items
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        if !dropper.loot.is_pending() {
+            pumpkin_inventory::sync_read_items_from_nbt(
+                nbt,
+                dropper
+                    .items
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
 
         dropper
     }
 
     fn apply_item_components(&self, stack: &ItemStack) {
         self.metadata.apply_item_components(stack);
+        self.loot.apply_item_components(stack);
         let mut items = self
             .items
             .write()
@@ -68,6 +75,8 @@ impl BlockEntity for DropperBlockEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         super::collect_container_items_from_slice(&*items, stack);
     }
+
+    super::pending_loot_hooks!();
 
     fn get_lock(&self) -> Option<pumpkin_data::data_component_impl::LockImpl> {
         self.metadata.get_lock()
@@ -141,6 +150,7 @@ impl DropperBlockEntity {
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             metadata: super::ContainerMetadata::default(),
+            loot: super::PendingLoot::default(),
         }
     }
 

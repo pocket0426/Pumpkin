@@ -262,6 +262,8 @@ impl BlockBehaviour for DispenserBlock {
                 return;
             };
 
+            // Vanilla `getRandomSlot` unpacks first
+            crate::block::blocks::chests::unpack_loot_table(args.world, &block_entity, None);
             if let Some((slot_index, mut item)) = dispenser.get_random_slot() {
                 let props = DispenserLikeProperties::from_state_id(state.id);
                 let ctx = DispenseContext {

@@ -157,6 +157,8 @@ impl BlockBehaviour for DropperBlock {
                 return;
             };
 
+            // Vanilla `getRandomSlot` unpacks first
+            crate::block::blocks::chests::unpack_loot_table(args.world, &block_entity, None);
             if let Some((slot_index, item)) = dropper.get_random_slot() {
                 let props = DispenserLikeProperties::from_state_id(state.id);
                 let direction = props.facing.to_block_direction();

@@ -1,3 +1,4 @@
+mod barrel_loot;
 mod bed_villager;
 mod bell_ring;
 mod block_tuning_and_invert;
@@ -68,6 +69,7 @@ pub async fn run_bot_tests(
     shulker_lid::run_shulker_lid_pushes_entity_test(server, summary_lines)?;
     dripstone_mud::run_dripstone_dries_mud_test(server, summary_lines)?;
     bell_ring::run_bell_ring_test(server, summary_lines)?;
+    barrel_loot::run_barrel_loot_test(server, summary_lines)?;
     piglin_anger::run_piglin_anger_test(server, summary_lines)?;
 
     polar_bear::run_polar_bear_defense_test(server, &bot1, summary_lines)?;

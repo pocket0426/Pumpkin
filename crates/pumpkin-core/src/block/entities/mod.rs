@@ -81,8 +81,6 @@ pub trait BlockEntity: Any + Send + Sync {
     /// Clears the pending loot-table key and runs `generate` with it and the seed.
     /// Implementations reserve the one-time unpack under the loot lock, release both chest locks
     /// before generation, then place into still-empty slots.
-    // TODO vanilla `RandomizableContainerBlockEntity`: barrels, shulker boxes, dispensers, droppers, hoppers,
-    // crafters and decorated pots hold loot tables too. Only chests implement this.
     fn unpack_loot_table_with(&self, _generate: &mut dyn FnMut(String, i64) -> Vec<ItemStack>) {}
 
     /// Returns `true` if this block entity has a pending deferred loot table that has
@@ -207,6 +205,123 @@ pub trait BlockEntity: Any + Send + Sync {
         None
     }
 }
+
+/// Vanilla `RandomizableContainerBlockEntity`'s `lootTable` and `lootTableSeed`: a loot table
+/// that fills the container the first time something looks inside.
+#[derive(Default)]
+pub struct PendingLoot {
+    key: std::sync::Mutex<Option<String>>,
+    seed: std::sync::atomic::AtomicI64,
+}
+
+impl PendingLoot {
+    /// Vanilla `tryLoadLootTable`. A container with a pending table has no saved items.
+    #[must_use]
+    pub fn from_nbt(nbt: &NbtCompound) -> Self {
+        Self {
+            key: std::sync::Mutex::new(nbt.get_string("LootTable").map(ToString::to_string)),
+            seed: std::sync::atomic::AtomicI64::new(nbt.get_long("LootTableSeed").unwrap_or(0)),
+        }
+    }
+
+    /// Vanilla `setLootTable(key, seed)`.
+    pub fn set(&self, key: impl Into<String>, seed: i64) {
+        *self
+            .key
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key.into());
+        self.seed.store(seed, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn key(&self) -> Option<String> {
+        self.key
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    #[must_use]
+    pub fn is_pending(&self) -> bool {
+        self.key
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn seed(&self) -> i64 {
+        self.seed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Vanilla `trySaveLootTable`: true when the table was written, and the items must not be.
+    pub fn write_nbt(&self, nbt: &mut NbtCompound) -> bool {
+        let Some(key) = self.key() else {
+            return false;
+        };
+        nbt.put_string("LootTable", key);
+        let seed = self.seed();
+        if seed != 0 {
+            nbt.put_long("LootTableSeed", seed);
+        }
+        true
+    }
+
+    /// The `container_loot` component of the item this block was placed from.
+    pub fn apply_item_components(&self, stack: &ItemStack) {
+        if let Some(loot) =
+            stack.get_data_component::<pumpkin_data::data_component_impl::ContainerLootImpl>()
+        {
+            *self
+                .key
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(loot.loot_table.clone());
+            self.seed
+                .store(loot.seed, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// A block that keeps its contents as an item keeps a table nobody has opened yet.
+    pub fn collect_item_components(&self, stack: &mut ItemStack) {
+        if let Some(loot_table) = self.key() {
+            stack.set_data_component(pumpkin_data::data_component_impl::ContainerLootImpl {
+                loot_table,
+                seed: self.seed(),
+            });
+        }
+    }
+
+    /// Fills `items` from the pending table. Returns whether there was one.
+    pub fn unpack_into<const N: usize>(
+        &self,
+        items: &std::sync::RwLock<[ItemStack; N]>,
+        generate: &mut dyn FnMut(String, i64) -> Vec<ItemStack>,
+    ) -> bool {
+        crate::world::loot::unpack_loot_into_slots(&self.key, self.seed(), items, |key, seed| {
+            generate(key, seed)
+        })
+        .is_some()
+    }
+}
+
+/// The three `BlockEntity` loot hooks for a container with `loot: PendingLoot` and `items`.
+macro_rules! pending_loot_hooks {
+    () => {
+        fn unpack_loot_table_with(&self, generate: &mut dyn FnMut(String, i64) -> Vec<ItemStack>) {
+            if self.loot.unpack_into(&self.items, generate) {
+                pumpkin_inventory::Inventory::mark_dirty(self);
+            }
+        }
+
+        fn has_loot_table(&self) -> bool {
+            self.loot.is_pending()
+        }
+
+        fn loot_table_key(&self) -> Option<String> {
+            self.loot.key()
+        }
+    };
+}
+pub(crate) use pending_loot_hooks;
 
 /// Shared `BaseContainerBlockEntity` / `BeaconBlockEntity` `CustomName` + `lock` state (`26.3`).
 #[derive(Default)]

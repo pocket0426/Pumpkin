@@ -5831,6 +5831,8 @@ impl World {
             && let Some(entity) = self.get_block_entity(position)
         {
             if !flags.contains(BlockFlags::SKIP_BLOCK_ENTITY_REPLACED_CALLBACK) {
+                // Vanilla `Containers.dropContents` reads the slots, which unpacks pending loot
+                crate::block::blocks::chests::unpack_loot_table(self, &entity, None);
                 entity.on_block_replaced(self, position);
             }
             self.remove_block_entity(position);
@@ -6011,6 +6013,13 @@ impl World {
                 broken_block_state,
                 cause,
             );
+
+        // A broken container gives up its loot, whether it scatters it or keeps it as an item
+        if broken_block_state.has_block_entity()
+            && let Some(entity) = self.get_block_entity(position)
+        {
+            crate::block::blocks::chests::unpack_loot_table(self, &entity, cause.map(Arc::as_ref));
+        }
 
         let tool = cause.map(|player| player.inventory().held_item());
         if !flags.contains(BlockFlags::SKIP_DROPS) {
