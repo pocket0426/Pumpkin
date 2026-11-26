@@ -36,16 +36,36 @@ impl BlockMetadata for PistonBlock {
 
 impl PistonBlock {
     #[must_use]
+    /// Vanilla `PistonBaseBlock.isPushable`.
     pub fn is_movable(
+        world: &World,
+        pos: &BlockPos,
         block: &Block,
         state: &BlockState,
         dir: BlockDirection,
         can_break: bool,
         piston_dir: BlockDirection,
     ) -> bool {
-        // TODO: more checks
+        let min_y = world.dimension.min_y;
+        let max_y = min_y + world.dimension.height - 1;
+        if pos.0.y < min_y
+            || pos.0.y > max_y
+            || !world
+                .worldborder
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(f64::from(pos.0.x), f64::from(pos.0.z))
+        {
+            return false;
+        }
         if state.is_air() {
             return true;
+        }
+        // Nothing is pushed out of the bottom or the top of the world
+        if (dir == BlockDirection::Down && pos.0.y == min_y)
+            || (dir == BlockDirection::Up && pos.0.y == max_y)
+        {
+            return false;
         }
         // Vanilla hardcoded them aswell
         if block == &Block::OBSIDIAN
@@ -242,7 +262,7 @@ impl PistonBlock {
                 let (block, state) = world.get_block_and_state(&pull_pos);
                 if r#type == 1
                     && !state.is_air()
-                    && Self::is_movable(block, state, dir.opposite(), false, dir)
+                    && Self::is_movable(world, &pull_pos, block, state, dir.opposite(), false, dir)
                     && (state.piston_behavior == PistonBehavior::Normal
                         || block == &Block::PISTON
                         || block == &Block::STICKY_PISTON)
@@ -511,4 +531,62 @@ fn move_piston(
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::ai::test_support::world;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[tokio::test]
+    async fn nothing_is_pushed_out_of_the_world() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let min_y = world.dimension.min_y;
+        let max_y = min_y + world.dimension.height - 1;
+        let stone = Block::STONE.default_state;
+        let air = Block::AIR.default_state;
+        let movable = |pos: BlockPos, state: &BlockState, dir: BlockDirection| {
+            PistonBlock::is_movable(
+                &world,
+                &pos,
+                Block::from_state_id(state.id),
+                state,
+                dir,
+                false,
+                dir,
+            )
+        };
+
+        let inside = movable(BlockPos::new(0, 64, 0), stone, BlockDirection::Up);
+        let up_at_the_top = movable(BlockPos::new(0, max_y, 0), stone, BlockDirection::Up);
+        let sideways_at_the_top = movable(BlockPos::new(0, max_y, 0), stone, BlockDirection::North);
+        let down_at_the_bottom = movable(BlockPos::new(0, min_y, 0), stone, BlockDirection::Down);
+        let sideways_at_the_bottom =
+            movable(BlockPos::new(0, min_y, 0), stone, BlockDirection::North);
+        // Bounds come before the air shortcut: a piston cannot extend past the build height
+        let air_above_the_world = movable(BlockPos::new(0, max_y + 1, 0), air, BlockDirection::Up);
+        let air_below_the_world =
+            movable(BlockPos::new(0, min_y - 1, 0), air, BlockDirection::Down);
+        let air_inside = movable(BlockPos::new(0, max_y, 0), air, BlockDirection::Up);
+        let outside_the_border = movable(
+            BlockPos::new(40_000_000, 64, 0),
+            stone,
+            BlockDirection::East,
+        );
+        world.level.shutdown().await;
+
+        assert!(inside);
+        assert!(!up_at_the_top);
+        assert!(sideways_at_the_top);
+        assert!(!down_at_the_bottom);
+        assert!(sideways_at_the_bottom);
+        assert!(!air_above_the_world);
+        assert!(!air_below_the_world);
+        assert!(air_inside);
+        assert!(!outside_the_border);
+        Ok(())
+    }
 }
