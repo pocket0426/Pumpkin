@@ -735,6 +735,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn charge_hits_on_contact_and_re_aims_when_close() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let spawn_cow = |pos| {
+            let cow = from_type(&EntityType::COW, pos, &world, Uuid::new_v4());
+            world.spawn_entity(cow.clone());
+            cow
+        };
+        let hit = |cow: &Arc<dyn EntityBase>| {
+            cow.get_living_entity()
+                .map_or(0.0, |living| living.last_damage_taken.load())
+        };
+        let mut goal = VexChargeAttackGoal;
+
+        // Two blocks off: no contact, the dive is aimed at the eyes again.
+        let near = spawn_cow(Vector3::new(2.5, 64.0, 0.5));
+        let diver = vex(&world);
+        diver.mob_entity.set_target(Some(near.clone()));
+        diver.set_charging(true);
+        goal.tick(&*diver);
+        let aimed = diver.move_control().get_wanted_position();
+        let near_hit = (hit(&near), diver.is_charging());
+
+        // Inside the target: it is hit and the charge is over.
+        let touching = spawn_cow(Vector3::new(0.5, 64.0, 0.5));
+        diver.mob_entity.set_target(Some(touching.clone()));
+        goal.tick(&*diver);
+        let contact = (hit(&touching) > 0.0, diver.is_charging());
+        world.level.shutdown().await;
+
+        assert_eq!(aimed, near.get_entity().get_eye_pos());
+        assert_eq!(near_hit, (0.0, true));
+        assert_eq!(contact, (true, false));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn spawned_vex_holds_an_iron_sword_it_never_drops() -> TestResult {
         let folder = tempfile::tempdir()?;
         let world = world(&folder);

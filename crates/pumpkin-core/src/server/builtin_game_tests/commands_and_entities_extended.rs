@@ -1,6 +1,9 @@
 use pumpkin_data::{
     Block,
-    block_properties::{CommandBlockLikeProperties, Facing, ScaffoldingLikeProperties},
+    block_properties::{
+        CommandBlockLikeProperties, Facing, PointedDripstoneLikeProperties,
+        ScaffoldingLikeProperties, SpeleothemThickness, VerticalDirection,
+    },
     tag::{self, Taggable},
 };
 use pumpkin_gametest::{GameTestHelper, GameTestResult};
@@ -471,6 +474,122 @@ pub(super) async fn test_falling_scaffolding_stays_dry_in_flowing_water(
                 props.waterlogged,
                 "scaffolding that landed in flowing water must not be waterlogged",
             )
+        })
+        .then_succeed();
+    Ok(())
+}
+
+fn dripstone(
+    direction: VerticalDirection,
+    thickness: SpeleothemThickness,
+) -> pumpkin_data::BlockStateId {
+    let mut props = PointedDripstoneLikeProperties::default(&Block::POINTED_DRIPSTONE);
+    props.vertical_direction = direction;
+    props.thickness = thickness;
+    props.to_state_id(&Block::POINTED_DRIPSTONE)
+}
+
+/// Vanilla `SpeleothemBlock.tick`: a stalactite whose ceiling is gone falls two ticks
+/// later, every segment as a falling block, and the tip hurts what is underneath.
+pub(super) async fn test_stalactite_falls_and_kills_chicken_below(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 5).await?;
+    build_glass_shaft(&helper, 1..=2).await?;
+    let ceiling = BlockPos::new(2, 5, 2);
+    helper.set_block_default(&ceiling, &Block::STONE).await?;
+    helper
+        .set_block(
+            &BlockPos::new(2, 4, 2),
+            dripstone(VerticalDirection::Down, SpeleothemThickness::Frustum),
+        )
+        .await?;
+    helper
+        .set_block(
+            &BlockPos::new(2, 3, 2),
+            dripstone(VerticalDirection::Down, SpeleothemThickness::Tip),
+        )
+        .await?;
+    helper
+        .spawn_entity("minecraft:chicken", &BlockPos::new(2, 1, 2))
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(5)
+        .then_execute(move |helper| async move {
+            // Still hanging while the ceiling is there.
+            helper
+                .assert_block_present(&BlockPos::new(2, 3, 2), &Block::POINTED_DRIPSTONE)
+                .await?;
+            helper.set_air(&ceiling).await
+        })
+        .then_idle(60)
+        .then_execute(move |helper| async move {
+            for y in 3..=4 {
+                helper
+                    .assert_block_present(&BlockPos::new(2, y, 2), &Block::AIR)
+                    .await?;
+            }
+            helper
+                .assert_entity_not_present("minecraft:chicken")
+                .await?;
+            // Neither segment can stand where it landed, so both are items now.
+            helper
+                .assert_item_entity_present(
+                    "minecraft:pointed_dripstone",
+                    &BlockPos::new(2, 1, 2),
+                    1.0,
+                )
+                .await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// A stalagmite whose floor is gone breaks from the bottom up, a block a tick, and drops.
+pub(super) async fn test_stalagmite_breaks_and_drops_without_floor(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 5).await?;
+    let base = BlockPos::new(2, 2, 2);
+    helper.set_block_default(&base, &Block::STONE).await?;
+    helper
+        .set_block(
+            &BlockPos::new(2, 3, 2),
+            dripstone(VerticalDirection::Up, SpeleothemThickness::Frustum),
+        )
+        .await?;
+    helper
+        .set_block(
+            &BlockPos::new(2, 4, 2),
+            dripstone(VerticalDirection::Up, SpeleothemThickness::Tip),
+        )
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(5)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_block_present(&BlockPos::new(2, 4, 2), &Block::POINTED_DRIPSTONE)
+                .await?;
+            helper.set_air(&base).await
+        })
+        .then_idle(20)
+        .then_execute(move |helper| async move {
+            for y in 3..=4 {
+                helper
+                    .assert_block_present(&BlockPos::new(2, y, 2), &Block::AIR)
+                    .await?;
+            }
+            helper
+                .assert_item_entity_present(
+                    "minecraft:pointed_dripstone",
+                    &BlockPos::new(2, 1, 2),
+                    2.0,
+                )
+                .await
         })
         .then_succeed();
     Ok(())

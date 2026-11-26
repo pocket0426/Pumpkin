@@ -3,10 +3,11 @@ use std::sync::Arc;
 use crate::{
     block::{
         BlockBehaviour, BrokenArgs, CanPlaceAtArgs, GetStateForNeighborUpdateArgs,
-        OnLandedUponArgs, OnPlaceArgs, OnProjectileHitArgs, PathComputationType, PlacedArgs,
-        RandomTickArgs,
+        OnLandedUponArgs, OnPlaceArgs, OnProjectileHitArgs, OnScheduledTickArgs,
+        PathComputationType, PlacedArgs, RandomTickArgs,
     },
     entity::{
+        falling::FallingEntity,
         player::Player,
         projectile::{may_break, may_interact},
     },
@@ -130,8 +131,35 @@ impl BlockBehaviour for DripstoneBlock {
                 TickPriority::Normal,
             );
         }
-        if !can_place_at_pos(args.world, args.block, args.position, None, None) {
-            return Block::AIR.default_state.id;
+        // Vanilla `SpeleothemBlock.updateShape`: only the blocks above and below matter, and
+        // a stalactite already about to fall is left alone.
+        if !matches!(args.direction, BlockDirection::Up | BlockDirection::Down) {
+            return args.state_id;
+        }
+        let hangs = dripstone_props.vertical_direction == VerticalDirection::Down;
+        if hangs
+            && args
+                .world
+                .is_block_tick_scheduled(args.position, args.block)
+        {
+            return args.state_id;
+        }
+        let support_side = if hangs {
+            BlockDirection::Up
+        } else {
+            BlockDirection::Down
+        };
+        if args.direction == support_side
+            && !can_place_at_pos(args.world, args.block, args.position, None, None)
+        {
+            // Lost its support: a stalactite falls two ticks later, a stalagmite breaks next tick.
+            args.world.schedule_block_tick(
+                args.block,
+                *args.position,
+                if hangs { 2 } else { 1 },
+                TickPriority::Normal,
+            );
+            return args.state_id;
         }
         if dripstone_props.thickness != SpeleothemThickness::TipMerge {
             return args.state_id;
@@ -153,6 +181,20 @@ impl BlockBehaviour for DripstoneBlock {
             }
         }
         args.state_id
+    }
+
+    /// Vanilla `SpeleothemBlock.tick`, scheduled when the support went away.
+    fn on_scheduled_tick(&self, args: OnScheduledTickArgs<'_>) {
+        let (block, state_id) = args.world.get_block_and_state_id(args.position);
+        if !block.has_tag(&tag::Block::MINECRAFT_SPELEOTHEMS) {
+            return;
+        }
+        if is_stalactite(block, state_id) {
+            spawn_falling_stalactite(args.world, args.position, state_id);
+        } else if !can_place_at_pos(args.world.as_ref(), block, args.position, None, None) {
+            args.world
+                .break_block(args.position, None, BlockFlags::NOTIFY_ALL);
+        }
     }
 
     fn on_landed_upon(&self, args: OnLandedUponArgs<'_>) {
@@ -632,6 +674,32 @@ fn can_drip_through(world: &World, pos: &BlockPos, state: &BlockState) -> bool {
     !state
         .get_block_collision_shapes()
         .any(|shape| shape.intersects(&REQUIRED_SPACE_TO_DRIP_THROUGH_NON_SOLID_BLOCK))
+}
+
+/// Vanilla `spawnFallingStalactite`: every segment from `pos` down to the tip becomes a
+/// falling block, and the tip hurts what it lands on, harder the longer the stalactite.
+fn spawn_falling_stalactite(world: &Arc<World>, pos: &BlockPos, state_id: BlockStateId) {
+    const MIN_TIP_DAMAGE_PER_BLOCK: i32 = 6;
+    const MAX_TIP_DAMAGE: i32 = 40;
+
+    let mut cursor = *pos;
+    let mut state_id = state_id;
+    loop {
+        let block = Block::from_state_id(state_id);
+        if !is_stalactite(block, state_id) {
+            return;
+        }
+        let Some(falling) = FallingEntity::replace_spawn(world, cursor, state_id) else {
+            return;
+        };
+        if is_tip(block, state_id, true) {
+            let size = (1 + pos.0.y - cursor.0.y).max(MIN_TIP_DAMAGE_PER_BLOCK);
+            falling.set_hurts_entities(size as f32, MAX_TIP_DAMAGE);
+            return;
+        }
+        cursor = cursor.down();
+        state_id = world.get_block_state_id(&cursor);
+    }
 }
 
 fn is_stalactite_start_pos(

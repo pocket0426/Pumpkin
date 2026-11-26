@@ -214,9 +214,15 @@ impl FallingEntity {
             if !self.entity.is_silent() {
                 world.sync_world_event(WorldEvent::SoundAnvilBroken, pos, 0);
             }
-        } else if block == &Block::POINTED_DRIPSTONE {
+        } else if block.has_tag(&tag::Block::MINECRAFT_SPELEOTHEMS) {
+            // Vanilla `getStalactiteLandingSound`.
+            let sound = if block == &Block::SULFUR_SPIKE {
+                WorldEvent::SoundSulfurSpikeLand
+            } else {
+                WorldEvent::SoundPointedDripstoneLand
+            };
             if !self.entity.is_silent() {
-                world.sync_world_event(WorldEvent::SoundPointedDripstoneLand, pos, 0);
+                world.sync_world_event(sound, pos, 0);
             }
         } else if block == &Block::SUSPICIOUS_SAND || block == &Block::SUSPICIOUS_GRAVEL {
             let center = self.entity.bounding_box.load().get_center();
@@ -280,7 +286,7 @@ impl FallingEntity {
         let is_anvil = block.has_tag(&tag::Block::MINECRAFT_ANVIL);
         let damage_type = if is_anvil {
             DamageType::FALLING_ANVIL
-        } else if block == &Block::POINTED_DRIPSTONE {
+        } else if block.has_tag(&tag::Block::MINECRAFT_SPELEOTHEMS) {
             DamageType::FALLING_STALACTITE
         } else {
             DamageType::FALLING_BLOCK

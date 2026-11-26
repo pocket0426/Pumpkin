@@ -264,6 +264,8 @@ const BUILTIN_TEST_IDS: &[&str] = &[
     "pumpkin:falling_anvil_kills_chicken_below",
     "pumpkin:falling_concrete_powder_hardens_at_water_surface",
     "pumpkin:falling_scaffolding_stays_dry_in_flowing_water",
+    "pumpkin:stalactite_falls_and_kills_chicken_below",
+    "pumpkin:stalagmite_breaks_and_drops_without_floor",
     "pumpkin:tnt_primed_by_redstone_torch",
     "pumpkin:snow_golem_horizontal_pattern_spawns",
     "pumpkin:iron_golem_pattern_clears_all_four_blocks",
@@ -1765,6 +1767,20 @@ pub fn ensure_builtin_game_tests_registered() {
             100,
             0,
             commands_and_entities_extended::test_falling_scaffolding_stays_dry_in_flowing_water,
+        );
+        register_function_test(
+            "pumpkin:stalactite_falls_and_kills_chicken_below",
+            "pumpkin:empty_5x6x5",
+            100,
+            0,
+            commands_and_entities_extended::test_stalactite_falls_and_kills_chicken_below,
+        );
+        register_function_test(
+            "pumpkin:stalagmite_breaks_and_drops_without_floor",
+            "pumpkin:empty_5x6x5",
+            60,
+            0,
+            commands_and_entities_extended::test_stalagmite_breaks_and_drops_without_floor,
         );
         register_function_test(
             "pumpkin:tnt_primed_by_redstone_torch",
