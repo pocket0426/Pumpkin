@@ -46,7 +46,6 @@ pub(crate) enum CauldronDripFluid {
     Lava,
 }
 
-// TODO: randomTick, maybeTransferFluid (mud to clay, cauldron fill) and growth
 #[pumpkin_block_from_tag("minecraft:speleothems")]
 pub struct DripstoneBlock;
 
@@ -231,7 +230,8 @@ pub(crate) fn cauldron_drip_fluid(
     get_fluid_above_stalactite(world, tip_block, &tip_pos, tip_state_id).map(|info| info.fluid)
 }
 
-pub(crate) fn maybe_transfer_fluid(
+/// Vanilla `PointedDripstoneBlock.maybeTransferFluid`.
+pub fn maybe_transfer_fluid(
     world: &Arc<World>,
     pos: &BlockPos,
     state_id: BlockStateId,
@@ -267,10 +267,18 @@ pub(crate) fn maybe_transfer_fluid(
     };
 
     if fluid_info.from_mud && fluid_info.fluid == CauldronDripFluid::Water {
+        let mud_state = world.get_block_state(&fluid_info.pos);
         world.set_block_state(
             &fluid_info.pos,
             Block::CLAY.default_state.id,
             BlockFlags::NOTIFY_ALL,
+        );
+        // Mud is two pixels lower than clay, so whoever stands on it is lifted onto the clay
+        crate::block::push_entities_up(
+            world,
+            &fluid_info.pos,
+            mud_state,
+            Block::CLAY.default_state,
         );
         world.emit_game_event(
             GameEvent::BlockChange.name(),

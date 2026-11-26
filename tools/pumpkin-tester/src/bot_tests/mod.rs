@@ -1,6 +1,7 @@
 mod bed_villager;
 mod block_tuning_and_invert;
 mod commands_and_gamemode;
+mod dripstone_mud;
 mod embedded_stop;
 mod login_and_movement;
 mod loot_tables;
@@ -64,6 +65,7 @@ pub async fn run_bot_tests(
     snow_golem::run_snow_golem_shearing_test(server, summary_lines)?;
     bed_villager::run_bed_kicks_sleeping_villager_test(server, summary_lines)?;
     shulker_lid::run_shulker_lid_pushes_entity_test(server, summary_lines)?;
+    dripstone_mud::run_dripstone_dries_mud_test(server, summary_lines)?;
     piglin_anger::run_piglin_anger_test(server, summary_lines)?;
 
     polar_bear::run_polar_bear_defense_test(server, &bot1, summary_lines)?;
