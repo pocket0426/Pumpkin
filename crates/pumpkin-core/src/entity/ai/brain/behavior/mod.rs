@@ -38,6 +38,7 @@ pub mod set_entity_look_target_sometimes;
 pub mod set_walk_target_from_attack_target_if_target_out_of_reach;
 pub mod set_walk_target_from_look_target;
 pub mod shuffling_list;
+pub mod spear;
 pub mod start_attacking;
 pub mod start_celebrating_if_target_dead;
 pub mod stay_close_to_target;

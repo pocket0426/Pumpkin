@@ -1,19 +1,55 @@
 use std::sync::Arc;
 
 use pumpkin_core::{
-    entity::{Entity, EntityBase, ai::brain::memory::types, mob::piglin::PiglinEntity},
+    entity::{
+        Entity, EntityBase, ai::brain::memory::types, mob::piglin::PiglinEntity, player::Player,
+    },
     net::ClientPlatform,
     server::Server,
-    world::BlockFlags,
+    world::{BlockFlags, World},
 };
 use pumpkin_data::{
-    Block, attributes::Attributes, data_component_impl::EquipmentSlot, dimension::Dimension,
-    entity::EntityType, item::Item, item_stack::ItemStack,
+    Block, BlockStateId, attributes::Attributes, data_component_impl::EquipmentSlot,
+    dimension::Dimension, entity::EntityType, item::Item, item_stack::ItemStack,
 };
 use pumpkin_protocol::{codec::var_int::VarInt, java::server::play::SUseItemOn};
-use pumpkin_util::{GameMode, math::vector3::Vector3};
+use pumpkin_util::{
+    GameMode,
+    math::{position::BlockPos, vector3::Vector3},
+};
 
 use super::offset_within_chunk;
+
+fn set_helmet(player: &Player, stack: ItemStack) {
+    player
+        .living_entity
+        .entity_equipment
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .put(&EquipmentSlot::HEAD, stack);
+}
+
+/// Lays stone under and clears three blocks of air over a 3x3 area, returning what was there.
+fn build_pad(world: &Arc<World>, origin: BlockPos) -> Vec<(BlockPos, BlockStateId)> {
+    let mut previous = Vec::new();
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            for dy in -1..=2 {
+                let pos = origin.offset(Vector3::new(dx, dy, dz));
+                let block = if dy < 0 { &Block::STONE } else { &Block::AIR };
+                previous.push((pos, world.get_block_state_id(&pos)));
+                world.set_block_state(&pos, block.default_state.id, BlockFlags::NOTIFY_ALL);
+            }
+        }
+    }
+    previous
+}
+
+fn run_ticks(server: &Arc<Server>, count: usize) {
+    for _ in 0..count {
+        server.tick();
+    }
+}
 
 pub fn run_piglin_anger_test(
     server: &Arc<Server>,
@@ -33,14 +69,7 @@ pub fn run_piglin_anger_test(
     if let Some(other) = &bystander {
         other.set_gamemode(GameMode::Creative);
     }
-    let set_helmet = |stack: ItemStack| {
-        player
-            .living_entity
-            .entity_equipment
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .put(&EquipmentSlot::HEAD, stack);
-    };
+    let set_helmet = |stack: ItemStack| set_helmet(&player, stack);
     set_helmet(ItemStack::new(1, &Item::GOLDEN_HELMET));
     let origin = player.get_entity().block_pos.load();
     let barrel_pos = offset_within_chunk(origin, 2);
@@ -58,17 +87,12 @@ pub fn run_piglin_anger_test(
         is_against_world_border: false,
         sequence: VarInt(300),
     };
-    // In the middle of the cleared column above the bot, so nothing blocks the line of sight.
-    for height in 2..=4 {
-        world.set_block_state(
-            &origin.up_height(height),
-            Block::AIR.default_state.id,
-            BlockFlags::NOTIFY_ALL,
-        );
-    }
+    // A flat, open 3x3 pad around the bot: on rough terrain the piglin can end up without a
+    // line of sight, and the brain caches that for a whole sensor period.
+    let pad = build_pad(&world, origin);
     let piglin = PiglinEntity::new(Entity::new(
         world.clone(),
-        origin.to_f64().add_raw(0.0, 3.0, 0.0),
+        origin.to_f64().add_raw(0.5, 0.0, 0.5),
         &EntityType::PIGLIN,
     ));
     // Kept from strolling out of sight while its sensors warm up.
@@ -85,33 +109,16 @@ pub fn run_piglin_anger_test(
         })
     };
     // Each piglin reacts on its own brain tick, and only once its sensors have seen the player.
-    for _ in 0..40 {
-        server.tick();
-    }
+    run_ticks(server, 40);
 
     // A creative player is not attackable, so opening the barrel angers nobody.
     client
         .handle_use_item_on(&player, &use_barrel, server)
         .map_err(|err| format!("Using the barrel in creative failed: {err:?}"))?;
-    for _ in 0..5 {
-        server.tick();
-    }
+    run_ticks(server, 5);
     let angry_in_creative = is_angry_at_player();
     player.close_handled_screen();
 
-    let activity_before = piglin.mob_entity.with_brain(piglin.as_ref(), |brain| {
-        format!(
-            "{:?} attack_target={:?} angry_at={}",
-            brain.get_active_non_core_activity(),
-            brain.get(types::ATTACK_TARGET).map(|target| (
-                target.get_entity().entity_type.resource_name,
-                target
-                    .get_player()
-                    .map(|p| (p.gamemode.load(), p.gameprofile.name.clone())),
-            )),
-            brain.has_memory_value(types::ANGRY_AT.id()),
-        )
-    });
     player.set_gamemode(GameMode::Survival);
     client
         .handle_use_item_on(&player, &use_barrel, server)
@@ -128,20 +135,9 @@ pub fn run_piglin_anger_test(
 
     let brain_state = piglin.mob_entity.with_brain(piglin.as_ref(), |brain| {
         format!(
-            "before={activity_before}; now={:?} idle={}, sees_living={}, sees_player={}, targetable_player={}, pos={:?}, alive={}, ticks={}, no_ai={}, player_pos={:?}",
+            "activity={:?}, sees the player={}",
             brain.get_active_non_core_activity(),
-            brain.is_active(pumpkin_data::environment_attribute::Activity::Idle),
-            brain.has_memory_value(types::NEAREST_VISIBLE_LIVING_ENTITIES.id()),
             brain.has_memory_value(types::NEAREST_VISIBLE_PLAYER.id()),
-            brain.has_memory_value(types::NEAREST_VISIBLE_ATTACKABLE_PLAYER.id()),
-            piglin.get_entity().pos.load(),
-            piglin.get_entity().is_alive(),
-            piglin
-                .get_entity()
-                .tick_count
-                .load(std::sync::atomic::Ordering::Relaxed),
-            piglin.mob_entity.is_no_ai(),
-            player.get_entity().pos.load(),
         )
     });
     player.set_gamemode(GameMode::Creative);
@@ -150,6 +146,9 @@ pub fn run_piglin_anger_test(
         other.set_gamemode(gamemode);
     }
     piglin.get_entity().remove();
+    for (pos, state) in pad {
+        world.set_block_state(&pos, state, BlockFlags::NOTIFY_ALL);
+    }
     world.set_block_state(
         &barrel_pos,
         Block::AIR.default_state.id,

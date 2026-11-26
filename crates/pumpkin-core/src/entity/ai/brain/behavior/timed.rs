@@ -17,6 +17,11 @@ pub trait Behavior: Send + Sync {
         DEFAULT_DURATION
     }
 
+    /// Vanilla `Behavior.timedOut`, which a few behaviors override to never give up.
+    fn can_time_out(&self) -> bool {
+        true
+    }
+
     fn check_extra_start_conditions(&mut self, _tick: &mut BrainTick<'_>) -> bool {
         true
     }
@@ -53,8 +58,8 @@ impl<B: Behavior> Timed<B> {
     }
 
     #[must_use]
-    pub const fn has_timed_out(&self, time: i64) -> bool {
-        time > self.end_timestamp
+    pub fn has_timed_out(&self, time: i64) -> bool {
+        self.inner.can_time_out() && time > self.end_timestamp
     }
 
     pub const fn start_at(&mut self, time: i64, duration: i32) {

@@ -1358,6 +1358,15 @@ fn init_fight_activity() -> ActivityData {
                     1.0
                 }),
             ),
+            Box::new(behavior::Timed::new(behavior::spear::SpearApproach::new(
+                1.0, 10.0,
+            ))),
+            Box::new(behavior::Timed::new(behavior::spear::SpearAttack::new(
+                1.0, 1.0, 2.0,
+            ))),
+            Box::new(behavior::Timed::new(behavior::spear::SpearRetreat::new(
+                1.0,
+            ))),
             Box::new(behavior::melee_attack::create(MELEE_ATTACK_COOLDOWN)),
             Box::new(behavior::Timed::new(
                 behavior::crossbow_attack::CrossbowAttack::new(),

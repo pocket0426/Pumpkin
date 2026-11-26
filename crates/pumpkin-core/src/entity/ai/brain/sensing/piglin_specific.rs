@@ -6,8 +6,8 @@ use pumpkin_data::tag::{self, Taggable};
 use pumpkin_data::{Block, BlockState};
 use pumpkin_util::math::position::BlockPos;
 
+use super::super::BrainTick;
 use super::super::memory::{MemoryModuleId, types};
-use super::super::{BrainState, BrainTick};
 use super::Sensor;
 use crate::entity::EntityBase;
 use crate::entity::living::LivingEntity;
@@ -64,25 +64,6 @@ fn is_baby(entity: &dyn EntityBase) -> bool {
             },
             PiglinEntity::is_baby,
         )
-}
-
-/// Vanilla `PiglinAi.findNearbyAdultPiglins`.
-#[must_use]
-pub fn find_nearby_adult_piglins(brain: &BrainState) -> Vec<Arc<dyn EntityBase>> {
-    brain
-        .get(types::NEAREST_LIVING_ENTITIES)
-        .map(|nearby| {
-            nearby
-                .iter()
-                .filter(|entity| {
-                    let entity_type = entity.get_entity().entity_type;
-                    (entity_type == &EntityType::PIGLIN || entity_type == &EntityType::PIGLIN_BRUTE)
-                        && !is_baby(entity.as_ref())
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 impl Sensor for PiglinSpecificSensor {
@@ -155,7 +136,7 @@ impl Sensor for PiglinSpecificSensor {
             }
         }
 
-        let nearby_adult_piglins = find_nearby_adult_piglins(tick.state);
+        let nearby_adult_piglins = piglin_ai::find_nearby_adult_piglins(tick.state);
         let visible_adult_piglin_count = visible_adult_piglins.len() as i32;
         let state = &mut *tick.state;
         state.set_optional(types::NEAREST_VISIBLE_NEMESIS, nemesis);
