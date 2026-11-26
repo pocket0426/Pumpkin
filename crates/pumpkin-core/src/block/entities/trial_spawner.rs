@@ -2,7 +2,6 @@ use rustc_hash::FxHashSet;
 use std::sync::{Arc, Mutex};
 
 use pumpkin_data::block_properties::{TrialSpawnerLikeProperties, TrialSpawnerState};
-use pumpkin_data::data_component_impl::EquipmentSlot;
 use pumpkin_data::effect::StatusEffect;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
@@ -1035,7 +1034,7 @@ impl TrialSpawner {
 
     #[allow(clippy::too_many_lines)]
     pub fn spawn_mob(&mut self, world: &Arc<World>, spawner_pos: BlockPos) -> Option<Uuid> {
-        let (entity_type, spawn_range, equipment_loot_table, is_baby, slime_size, only_id) = {
+        let (entity_type, spawn_range, equipment_loot_table, is_baby, slime_size, described) = {
             let active_cfg = if self.is_ominous {
                 &self.config.ominous
             } else {
@@ -1063,7 +1062,16 @@ impl TrialSpawner {
             });
             // finalizes only when the entity compound is just the id.
             let only_id = raw.is_none_or(|r| r.child_tags.len() <= 1);
-            (ent_type, active_cfg.spawn_range, equip, baby, size, only_id)
+            // What the entity tag says beyond its id, to load into the mob
+            let described = raw.filter(|_| !only_id).cloned();
+            (
+                ent_type,
+                active_cfg.spawn_range,
+                equip,
+                baby,
+                size,
+                described,
+            )
         };
 
         let mut rng = rand::rng();
@@ -1105,8 +1113,13 @@ impl TrialSpawner {
         }
 
         let spawn_pos = chosen_pos?;
-        let entity_uuid = Uuid::new_v4();
-        let entity = crate::entity::r#type::from_type(entity_type, spawn_pos, world, entity_uuid);
+        let only_id = described.is_none();
+        // Vanilla `EntityType.loadEntityRecursive`: a described mob comes as described
+        let entity = described
+            .and_then(|nbt| crate::entity::r#type::load_entity_from_nbt(&nbt, spawn_pos, world))
+            .unwrap_or_else(|| {
+                crate::entity::r#type::from_type(entity_type, spawn_pos, world, Uuid::new_v4())
+            });
 
         let yaw = rng.random::<f32>() * 360.0;
         entity.get_entity().set_rotation(yaw, 0.0);
@@ -1123,32 +1136,8 @@ impl TrialSpawner {
                 .set_synced_data(pumpkin_data::tracked_data::slime::ID_SIZE, i32::from(size));
         }
 
-        if let Some(equip) = equipment_loot_table
-            && let Some(loot_table) = world.get_loot_table(&equip)
-            && let Some(living) = entity.get_living_entity()
-        {
-            let seed = rand::random::<i64>();
-            let items = loot_table.generate_loot_with_context(
-                seed,
-                &crate::world::loot::LootContextParameters {
-                    world: Some(world),
-                    ..Default::default()
-                },
-            );
-            let mut equipment = living
-                .entity_equipment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut equipment_changes = Vec::new();
-            for item in items {
-                let slot = item
-                    .get_data_component::<pumpkin_data::data_component_impl::EquippableImpl>()
-                    .map_or(EquipmentSlot::MAIN_HAND, |eq| eq.slot.clone());
-                equipment.put(&slot, item.clone());
-                equipment_changes.push((slot, item));
-            }
-            drop(equipment);
-            living.send_equipment_changes(&equipment_changes);
+        if let Some(equip) = equipment_loot_table {
+            super::mob_spawner::equip_from_loot_table(world, &entity, &equip);
         }
 
         let mut event =
@@ -1163,7 +1152,6 @@ impl TrialSpawner {
             return None;
         }
 
-        // TODO: load the spawn data entity NBT into the mob instead of the baby/slime-size special cases.
         if only_id {
             crate::entity::mob::spawn::finalize_spawn(
                 &entity,
@@ -1172,6 +1160,8 @@ impl TrialSpawner {
                 None,
             );
         }
+        // The tag may carry its own `UUID`
+        let entity_uuid = entity.get_entity().entity_uuid;
         world.spawn_entity(entity);
 
         let flame_data = i32::from(self.is_ominous);

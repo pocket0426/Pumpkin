@@ -197,15 +197,7 @@ impl BlockEntity for JukeboxBlockEntity {
             let item_entity = Arc::new(crate::entity::item::ItemEntity::new(entity, record));
             world.spawn_entity(item_entity);
         }
-        world.emit_game_event(
-            pumpkin_data::game_event::GameEvent::JukeboxStopPlay.name(),
-            position.to_centered_f64(),
-        );
-        world.sync_world_event(
-            pumpkin_data::world::WorldEvent::SoundStopJukeboxSong,
-            *position,
-            0,
-        );
+        // `clear_record` already stopped a playing song, with its events
     }
 }
 
@@ -308,12 +300,8 @@ impl JukeboxBlockEntity {
                     );
                     world.update_neighbors(&self.position, None);
                 } else {
+                    // Vanilla `JukeboxSongPlayer.stop` says so only when a song was playing
                     self.stop_playing();
-                    world.sync_world_event(
-                        pumpkin_data::world::WorldEvent::SoundStopJukeboxSong,
-                        self.position,
-                        0,
-                    );
                 }
             }
         } else if inserted && let Some(song) = playable_song {
@@ -359,8 +347,8 @@ impl JukeboxBlockEntity {
 }
 
 /// Implements single-slot inventory for jukebox (matches vanilla's `SingleStackInventory`)
-// TODO vanilla `splitTheItem` is `setTheItem(EMPTY)`: `HAS_RECORD` then song stop. `remove_stack` stops first.
-// TODO vanilla `setTheItem` always notifies and play/stop. `update_stack` only syncs when emptiness flips.
+// Vanilla `setTheItem` notifies on every call. `update_stack` only does when the slot goes from empty
+// to filled or back, which is every change a one-record slot can see.
 impl Inventory for JukeboxBlockEntity {
     fn size(&self) -> usize {
         1
@@ -380,9 +368,10 @@ impl Inventory for JukeboxBlockEntity {
             .clone()
     }
 
+    /// Vanilla `splitTheItem`, which is `setTheItem(EMPTY)`: the block loses `HAS_RECORD` first,
+    /// then the song stops.
     fn remove_stack(&self, _slot: usize) -> ItemStack {
         let _transition = self.lock_record_transition();
-        self.stop_playing();
         let taken = {
             let mut record = self
                 .record_stack
@@ -405,17 +394,13 @@ impl Inventory for JukeboxBlockEntity {
                     state_id,
                     pumpkin_world::world::BlockFlags::NOTIFY_ALL,
                 );
-                world.sync_world_event(
-                    pumpkin_data::world::WorldEvent::SoundStopJukeboxSong,
-                    self.position,
-                    0,
-                );
                 world.emit_game_event(
                     pumpkin_data::game_event::GameEvent::BlockChange.name(),
                     self.position.to_centered_f64(),
                 );
             }
         }
+        self.stop_playing();
         self.mark_dirty();
         taken
     }

@@ -357,8 +357,8 @@ cargo run --locked -p pumpkin-tester      # 게임 테스트 전체 (약 1분 + 
 |---|---|---|---|
 | 10 | 종: 주민에게 들린 시각 기록, 약탈자 발광, 클라이언트 흔들림 | `entities/bell.rs`, `redstone/bell.rs` | **완료** |
 | 11 | 철사 가위 내구도 TODO | `redstone/tripwire.rs` | **정리** (바닐라에 없는 동작, 주석만 교체) |
-| 12 | 주크박스 `setTheItem` 순서 (아이템 → `HAS_RECORD` → 재생/정지) | `entities/jukebox.rs` | 대기 |
-| 13 | 스포너·시련 스포너의 `SpawnData` NBT 적용 | `entities/mob_spawner.rs`, `trial_spawner.rs` | 대기 |
+| 12 | 주크박스 `setTheItem` 순서 (아이템 → `HAS_RECORD` → 재생/정지) | `entities/jukebox.rs` | **완료** (순서와 중복 이벤트만 정리) |
+| 13 | 스포너·시련 스포너의 `SpawnData` NBT 적용 | `entities/mob_spawner.rs`, `trial_spawner.rs`, 스포너 광산 수레 | **완료** |
 | 14 | 용기의 전리품 표 풀기 누락분 (통·셜커 상자·발사기·공급기·호퍼·제작기) | `entities/*.rs`, `player.rs`, `world/mod.rs` | **완료** |
 | 15 | 용기 잠금(`lock` 컴포넌트) | `blocks/chests.rs` | **정리** (`Player::open_handled_screen`에 이미 구현돼 있어 낡은 주석만 삭제) |
 
@@ -381,6 +381,26 @@ cargo run --locked -p pumpkin-tester      # 게임 테스트 전체 (약 1분 + 
 - 테스트: 단위 2개(`packed_barrel_saves_its_table_instead_of_items`, `unpacking_fills_the_barrel_once_and_forgets_the_table`), 봇 `bot:barrel_loot_table_unpacks_for_first_player`.
 
 게임 안에서 확인할 것: 마을 어부 집의 통, 정글 사원 발사기에 내용물이 있는지. `/setblock ~ ~ ~ barrel{LootTable:"minecraft:chests/simple_dungeon"}`로 만든 통을 열면 채워지는지, 열기 전에 부수면 전리품이 떨어지는지.
+
+13번 세부 (`BaseSpawner` 26.3 바이트코드):
+- 이전에는 스포너가 엔티티 종류 하나만 기억했습니다. `SpawnData`의 나머지(엔티티 NBT, `custom_spawn_rules`, `equipment`)와 `SpawnPotentials`는 읽지 않았고, **저장하면 사라졌습니다**. 명령어나 맵으로 만든 커스텀 스포너가 평범한 스포너로 바뀌던 문제입니다.
+- 이제 `SpawnData`와 `SpawnPotentials`를 그대로 보존하고 씁니다.
+  - 엔티티 태그가 `id`뿐이면 이전처럼 자연 스폰처럼 마무리(`finalizeSpawn`)하고, 그 외에는 태그대로 불러옵니다(장비·이름·`NoAI` 등).
+  - 태그에 `Pos`가 있으면 그 자리에만 스폰합니다.
+  - `custom_spawn_rules`가 있으면 몹 고유의 스폰 규칙 대신 밝기 범위만 봅니다. 평화로움에서 적대적 몹은 여전히 안 나옵니다.
+  - 대기 시간이 다시 정해질 때마다 `SpawnPotentials`에서 가중치로 다음 것을 고릅니다.
+  - `equipment` 전리품 표를 굴려 장비를 입힙니다(시련 스포너에 있던 코드를 공용으로 뺌). 드롭 확률은 아직 반영하지 않습니다(TODO).
+  - 게임 규칙 `spawnerBlocksWork`를 따릅니다.
+  - 주변 개수 검사 범위를 바닐라대로 스포너 칸을 스폰 범위만큼 키운 상자로 바꿨습니다(이전에는 가로 2배, 세로 4 고정).
+  - 스폰 시 `ENTITY_PLACE` 게임 이벤트.
+- 스포너 광산 수레도 같은 데이터를 씁니다. 시련 스포너는 아기·슬라임 크기만 따로 처리하던 것을 태그 전체를 불러오도록 바꿨습니다(기존 특수 처리는 남겨 둠).
+- 테스트: 단위 7개(`mob_spawner::tests`), 봇 `bot:spawner_spawns_the_entity_its_data_describes`.
+- 알게 된 것: 게임테스트 구역에는 플레이어가 없어서 스포너가 돌지 않습니다. 스포너 테스트는 봇 테스트로 써야 합니다. 이를 위해 테스터에 `pumpkin-nbt` 의존성을 추가했습니다(`Cargo.lock` 한 줄).
+
+12번 세부:
+- 레코드를 꺼낼 때 바닐라 순서(블록의 `HAS_RECORD` 해제 → 노래 정지)로 맞추고, 정지 이벤트가 두 번 나가던 것과 재생 중이 아닐 때도 나가던 것을 없앴습니다. 눈에 보이는 차이는 거의 없고, 스컬크 센서가 받는 이벤트 순서·횟수가 달라집니다.
+
+게임 안에서 확인할 것: `/setblock ~ ~ ~ spawner{SpawnData:{entity:{id:"minecraft:zombie",CustomName:"테스트",NoAI:1b}}}`로 만든 스포너에서 이름 붙은 좀비가 나오는지, 저장·재시작 뒤에도 그대로인지. 시련의 방 스포너가 이전처럼 동작하는지.
 
 ## 규칙 메모 (저장소 `AGENTS.md`, `CONTRIBUTING.md`)
 - 바닐라 동작은 디컴파일한 소스 기준으로 맞춘다. 위키나 기억 금지.

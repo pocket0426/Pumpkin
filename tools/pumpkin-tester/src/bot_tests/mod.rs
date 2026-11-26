@@ -14,6 +14,7 @@ mod sheep_shearing;
 mod shulker_lid;
 mod sign_authorization;
 mod snow_golem;
+mod spawner_data;
 mod status_ping;
 mod world_interaction;
 
@@ -70,6 +71,7 @@ pub async fn run_bot_tests(
     dripstone_mud::run_dripstone_dries_mud_test(server, summary_lines)?;
     bell_ring::run_bell_ring_test(server, summary_lines)?;
     barrel_loot::run_barrel_loot_test(server, summary_lines)?;
+    spawner_data::run_spawner_data_test(server, summary_lines)?;
     piglin_anger::run_piglin_anger_test(server, summary_lines)?;
 
     polar_bear::run_polar_bear_defense_test(server, &bot1, summary_lines)?;
