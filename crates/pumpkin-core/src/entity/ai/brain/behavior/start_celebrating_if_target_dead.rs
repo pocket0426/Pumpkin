@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pumpkin_data::entity::EntityType;
 
 use super::super::BrainTick;
@@ -10,7 +12,7 @@ use crate::entity::living::LivingEntity;
 #[must_use]
 pub fn create(
     celebrate_duration: i32,
-    dance_predicate: impl Fn(&BrainTick<'_>, &dyn EntityBase) -> bool + Send + Sync + 'static,
+    dance_predicate: impl Fn(&BrainTick<'_>, &Arc<dyn EntityBase>) -> bool + Send + Sync + 'static,
 ) -> OneShot {
     OneShot::new(
         "StartCelebratingIfTargetDead",
@@ -31,7 +33,7 @@ pub fn create(
                 return false;
             }
             let duration = i64::from(celebrate_duration);
-            if dance_predicate(tick, target.as_ref()) {
+            if dance_predicate(tick, &target) {
                 tick.state.set_with_expiry(types::DANCING, true, duration);
             }
             tick.state.set_with_expiry(

@@ -23,7 +23,13 @@ pub fn for_category(category: &'static MobCategory, max_dist: f32) -> OneShot {
     )
 }
 
-fn create(
+#[must_use]
+pub fn any(max_dist: f32) -> OneShot {
+    create(|_| true, max_dist)
+}
+
+#[must_use]
+pub fn create(
     predicate: impl Fn(&Arc<dyn EntityBase>) -> bool + Send + Sync + 'static,
     max_dist: f32,
 ) -> OneShot {

@@ -3,10 +3,21 @@ use std::sync::Arc;
 use super::super::memory::{
     MemoryStatus, position_tracker::EntityTracker, types, walk_target::WalkTarget,
 };
+use super::super::BrainTick;
 use super::{OneShot, utils};
 
 #[must_use]
 pub fn create(speed_modifier: f32, interrupt_ongoing_walk: bool, max_dist_to_walk: i32) -> OneShot {
+    create_with(|_| true, speed_modifier, interrupt_ongoing_walk, max_dist_to_walk)
+}
+
+#[must_use]
+pub fn create_with(
+    predicate: impl Fn(&BrainTick<'_>) -> bool + Send + Sync + 'static,
+    speed_modifier: f32,
+    interrupt_ongoing_walk: bool,
+    max_dist_to_walk: i32,
+) -> OneShot {
     OneShot::new(
         "GoToWantedItem",
         vec![
@@ -49,6 +60,7 @@ pub fn create(speed_modifier: f32, interrupt_ongoing_walk: bool, max_dist_to_wal
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .contains_block(item_block.0.x, item_block.0.z)
                 || !tick.mob.can_pick_up_loot(Some(tick.state))
+                || !predicate(tick)
             {
                 return false;
             }

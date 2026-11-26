@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 
 use super::super::OneShot;
 use crate::entity::EntityBase;
 use crate::entity::ai::brain::memory::{
-    MemoryModuleType, MemoryStatus, types, walk_target::WalkTarget,
+    MemoryModuleType, MemoryStatus, MemoryValue, types, walk_target::WalkTarget,
 };
 use crate::entity::ai::util::land_random_pos;
 
@@ -28,6 +29,38 @@ pub fn entity(
     desired_distance: i32,
     interrupt_current_walk: bool,
 ) -> OneShot {
+    create(
+        memory,
+        |entity| entity.get_entity().pos.load(),
+        speed_modifier,
+        desired_distance,
+        interrupt_current_walk,
+    )
+}
+
+#[must_use]
+pub fn pos(
+    memory: MemoryModuleType<BlockPos>,
+    speed_modifier: f32,
+    desired_distance: i32,
+    interrupt_current_walk: bool,
+) -> OneShot {
+    create(
+        memory,
+        BlockPos::to_f64,
+        speed_modifier,
+        desired_distance,
+        interrupt_current_walk,
+    )
+}
+
+fn create<T: MemoryValue>(
+    memory: MemoryModuleType<T>,
+    to_position: fn(&T) -> Vector3<f64>,
+    speed_modifier: f32,
+    desired_distance: i32,
+    interrupt_current_walk: bool,
+) -> OneShot {
     OneShot::new(
         "SetWalkTargetAwayFrom",
         vec![
@@ -40,11 +73,7 @@ pub fn entity(
                 return false;
             }
             let body_position = tick.mob.get_entity().pos.load();
-            let Some(avoid_position) = tick
-                .state
-                .get(memory)
-                .map(|entity| entity.get_entity().pos.load())
-            else {
+            let Some(avoid_position) = tick.state.get(memory).map(to_position) else {
                 return false;
             };
             if body_position.squared_distance_to_vec(&avoid_position)

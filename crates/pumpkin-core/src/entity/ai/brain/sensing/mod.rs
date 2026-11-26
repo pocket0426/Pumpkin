@@ -18,6 +18,7 @@ pub mod nearest_bed;
 pub mod nearest_items;
 pub mod nearest_living_entities;
 pub mod nearest_players;
+pub mod piglin_brute_specific;
 pub mod piglin_specific;
 pub mod secondary_pois;
 pub mod tempting;
