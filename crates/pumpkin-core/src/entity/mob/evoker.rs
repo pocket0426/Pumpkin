@@ -146,6 +146,17 @@ impl EvokerEntity {
 }
 
 impl Mob for EvokerEntity {
+    fn mob_considers_entity_as_ally(
+        &self,
+        other: &dyn crate::entity::EntityBase,
+        _brain: Option<&crate::entity::ai::brain::BrainState>,
+    ) -> Option<bool> {
+        // Vanilla also counts its own vexes, which have no owner here yet.
+        Some(crate::entity::mob::raider::illager_considers_ally(
+            self, other,
+        ))
+    }
+
     fn as_patrolling_monster(&self) -> Option<&dyn PatrollingMonster> {
         Some(self)
     }

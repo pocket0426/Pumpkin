@@ -12,6 +12,7 @@ use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::math::vector3::Vector3;
 use pumpkin_util::text::TextComponent;
 
+use crate::entity::EntityBase;
 use crate::entity::ai::behavior::fleeing::Flee;
 use crate::entity::ai::goal::revenge::RevengeGoal;
 use crate::entity::ai::goal::{Controls, Goal};
@@ -27,6 +28,23 @@ pub fn is_raider(entity_type: &'static EntityType) -> bool {
 
 /// Vanilla `HurtByTargetGoal(this, Raider.class).setAlertOthers()`.
 #[must_use]
+/// Vanilla `AbstractIllager.considersEntityAsAlly`: teammates, plus every
+/// `illager_friends` type as long as neither side is on a team.
+pub fn illager_considers_ally(illager: &dyn EntityBase, other: &dyn EntityBase) -> bool {
+    if !other
+        .get_entity()
+        .entity_type
+        .has_tag(&tag::EntityType::MINECRAFT_ILLAGER_FRIENDS)
+    {
+        return illager.is_on_same_team(other);
+    }
+    match (illager.get_team_name(), other.get_team_name()) {
+        (None, None) => true,
+        (Some(mine), Some(theirs)) => mine == theirs,
+        _ => false,
+    }
+}
+
 pub fn revenge_goal() -> Box<RevengeGoal> {
     Box::new(RevengeGoal::new(true).ignoring(is_raider).alerting_others())
 }

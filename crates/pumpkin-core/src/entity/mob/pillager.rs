@@ -139,6 +139,14 @@ impl PillagerEntity {
 }
 
 impl Mob for PillagerEntity {
+    fn mob_considers_entity_as_ally(
+        &self,
+        other: &dyn crate::entity::EntityBase,
+        _brain: Option<&crate::entity::ai::brain::BrainState>,
+    ) -> Option<bool> {
+        Some(raider::illager_considers_ally(self, other))
+    }
+
     // Raid banners going into the inventory are not handled yet.
     fn pick_up_item(&self, item: &crate::entity::item::ItemEntity) {
         let is_banner = item
