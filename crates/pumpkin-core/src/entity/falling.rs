@@ -2,16 +2,23 @@ use crossbeam::atomic::AtomicCell;
 use pumpkin_data::Block;
 use pumpkin_data::BlockState;
 use pumpkin_data::BlockStateId;
+use pumpkin_data::block_properties::{
+    PointedDripstoneLikeProperties, SpeleothemThickness, VerticalDirection,
+};
 use pumpkin_data::damage::DamageType;
 use pumpkin_data::entity::EntityType;
+use pumpkin_data::fluid::Fluid;
+use pumpkin_data::game_event::GameEvent;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::tag::{self, Taggable};
+use pumpkin_data::world::WorldEvent;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::bedrock::client::CUpdateBlock;
 use pumpkin_protocol::java::client::play::CBlockUpdate;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::resource_location::ToResourceLocation;
+use pumpkin_world::clip::{ClipBlock, ClipContext, ClipFluid};
 use pumpkin_world::generation::structure::template::{BlockStateResolver, PaletteEntry};
 use pumpkin_world::world::BlockFlags;
 use std::sync::atomic::{AtomicBool, AtomicI32};
@@ -19,7 +26,8 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 
 use crate::{
     block::{
-        blocks::falling::FallingBlock, entities::block_entity_from_nbt,
+        blocks::{anvil::AnvilBlock, falling::FallingBlock},
+        entities::block_entity_from_nbt,
         registry::can_replace_with_other_block,
     },
     entity::{Entity, EntityBase, living::LivingEntity},
@@ -62,7 +70,18 @@ pub struct FallingEntity {
     cancel_drop: AtomicBool,
     /// Vanilla `FallingBlockEntity.blockData`, NBT `TileEntityData`.
     block_data: Mutex<Option<NbtCompound>>,
+    /// Vanilla `hurtEntities`: landing hurts whatever is in the way (anvils, stalactites).
+    hurt_entities: AtomicBool,
+    /// Vanilla `fallDamagePerDistance`, NBT `FallHurtAmount`.
+    fall_damage_per_distance: AtomicCell<f32>,
+    /// Vanilla `fallDamageMax`, NBT `FallHurtMax`.
+    fall_damage_max: AtomicI32,
+    /// Vanilla `Entity.fallDistance`, which only living entities track elsewhere.
+    fall_distance: AtomicCell<f64>,
 }
+
+/// Vanilla default of `fallDamageMax`.
+const DEFAULT_FALL_DAMAGE_MAX: i32 = 40;
 
 impl FallingEntity {
     pub const fn new(mut entity: Entity, block_state_id: BlockStateId) -> Self {
@@ -74,7 +93,18 @@ impl FallingEntity {
             drop_item: AtomicBool::new(true),
             cancel_drop: AtomicBool::new(false),
             block_data: Mutex::new(None),
+            hurt_entities: AtomicBool::new(false),
+            fall_damage_per_distance: AtomicCell::new(0.0),
+            fall_damage_max: AtomicI32::new(DEFAULT_FALL_DAMAGE_MAX),
+            fall_distance: AtomicCell::new(0.0),
         }
+    }
+
+    /// Vanilla `setHurtsEntities`: `per_distance` damage a block fallen, capped at `max`.
+    pub fn set_hurts_entities(&self, per_distance: f32, max: i32) {
+        self.hurt_entities.store(true, Ordering::Relaxed);
+        self.fall_damage_per_distance.store(per_distance);
+        self.fall_damage_max.store(max, Ordering::Relaxed);
     }
 
     /// Vanilla `FallingBlockEntity.disableDrop`: land as nothing, neither block nor item.
@@ -153,16 +183,218 @@ impl FallingEntity {
         }
     }
 
-    // TODO: vanilla also calls `Fallable.onBrokenAfterFall` before the drop.
-    fn drop_as_item(&self) {
-        let world = self.entity.world.load();
-        if self.drop_item.load(Ordering::Relaxed)
-            && world.level_info.load().game_rules.entity_drops
-            && let Some(item) =
-                Item::from_id(Block::from_state_id(self.block_state_id.load()).item_id)
-        {
+    fn drops_items(&self, world: &World) -> bool {
+        self.drop_item.load(Ordering::Relaxed) && world.level_info.load().game_rules.entity_drops
+    }
+
+    fn spawn_item(&self, block: &Block) {
+        if let Some(item) = Item::from_id(block.item_id) {
             self.entity.spawn_at_location(ItemStack::new(1, item));
         }
+    }
+
+    /// The block could not be placed: break it and drop its item, if drops are on.
+    fn break_and_drop(&self, world: &World, block: &Block, pos: BlockPos) {
+        if self.drops_items(world) {
+            self.on_broken_after_fall(world, block, pos);
+            self.spawn_item(block);
+        }
+    }
+
+    /// Vanilla `Fallable.onLand`. Concrete powder hardening is decided before the block is set.
+    fn on_land(&self, world: &World, block: &Block, pos: BlockPos) {
+        if block.has_tag(&tag::Block::MINECRAFT_ANVIL) && !self.entity.is_silent() {
+            world.sync_world_event(WorldEvent::SoundAnvilLand, pos, 0);
+        }
+    }
+
+    /// Vanilla `Fallable.onBrokenAfterFall`.
+    fn on_broken_after_fall(&self, world: &World, block: &Block, pos: BlockPos) {
+        if block.has_tag(&tag::Block::MINECRAFT_ANVIL) {
+            if !self.entity.is_silent() {
+                world.sync_world_event(WorldEvent::SoundAnvilBroken, pos, 0);
+            }
+        } else if block == &Block::POINTED_DRIPSTONE {
+            if !self.entity.is_silent() {
+                world.sync_world_event(WorldEvent::SoundPointedDripstoneLand, pos, 0);
+            }
+        } else if block == &Block::SUSPICIOUS_SAND || block == &Block::SUSPICIOUS_GRAVEL {
+            let center = self.entity.bounding_box.load().get_center();
+            world.sync_world_event(
+                WorldEvent::ParticlesAndSoundDestroyBlock,
+                BlockPos::floored_v(center),
+                i32::from(self.block_state_id.load().as_u16()),
+            );
+            world.emit_game_event(GameEvent::BlockDestroy.name(), center);
+        }
+    }
+
+    /// Vanilla `Entity.checkFallDamage`, run by `move`: the fall grows while airborne and is
+    /// spent on the tick the block lands.
+    fn check_fall_damage(&self, world: &World, moved_y: f64) {
+        if !self.entity.on_ground.load(Ordering::Relaxed) {
+            if moved_y < 0.0 {
+                self.fall_distance
+                    .store(self.fall_distance.load() - moved_y);
+            }
+            return;
+        }
+        let fallen = self.fall_distance.swap(0.0);
+        if fallen <= 0.0 {
+            return;
+        }
+        // The block landed on decides: powder snow only cushions living things, and a
+        // stalagmite tip adds to the fall.
+        let pos = self.entity.pos.load();
+        let on_pos = BlockPos::floored(pos.x, pos.y - 0.2, pos.z);
+        let (on_block, on_state) = world.get_block_and_state_id(&on_pos);
+        if on_block == &Block::POWDER_SNOW {
+            return;
+        }
+        let onto_stalagmite_tip = on_block == &Block::POINTED_DRIPSTONE && {
+            let props = PointedDripstoneLikeProperties::from_state_id(on_state);
+            props.vertical_direction == VerticalDirection::Up
+                && props.thickness == SpeleothemThickness::Tip
+        };
+        self.cause_fall_damage(
+            world,
+            if onto_stalagmite_tip {
+                fallen + 2.5
+            } else {
+                fallen
+            },
+        );
+    }
+
+    /// Vanilla `FallingBlockEntity.causeFallDamage`.
+    fn cause_fall_damage(&self, world: &World, fall_distance: f64) {
+        if !self.hurt_entities.load(Ordering::Relaxed) {
+            return;
+        }
+        let distance = (fall_distance - 1.0).ceil() as i32;
+        if distance < 0 {
+            return;
+        }
+        let state_id = self.block_state_id.load();
+        let block = Block::from_state_id(state_id);
+        let is_anvil = block.has_tag(&tag::Block::MINECRAFT_ANVIL);
+        let damage_type = if is_anvil {
+            DamageType::FALLING_ANVIL
+        } else if block == &Block::POINTED_DRIPSTONE {
+            DamageType::FALLING_STALACTITE
+        } else {
+            DamageType::FALLING_BLOCK
+        };
+        let damage = ((distance as f32 * self.fall_damage_per_distance.load()).floor() as i32)
+            .min(self.fall_damage_max.load(Ordering::Relaxed)) as f32;
+        let area = self.entity.bounding_box.load();
+        let hurt = |victim: &dyn EntityBase| {
+            if victim
+                .get_living_entity()
+                .is_some_and(LivingEntity::is_alive)
+            {
+                victim.damage_with_context(
+                    victim,
+                    damage,
+                    damage_type,
+                    None,
+                    Some(self),
+                    Some(self),
+                );
+            }
+        };
+        for victim in world.get_entities_at_box(&area) {
+            if victim.get_entity().entity_id != self.entity.entity_id {
+                hurt(victim.as_ref());
+            }
+        }
+        for player in world.get_players_at_box(&area) {
+            if !player.is_creative() && !player.is_spectator() {
+                hurt(player.as_ref());
+            }
+        }
+        if is_anvil && damage > 0.0 && rand::random::<f32>() < (distance as f32).mul_add(0.05, 0.05)
+        {
+            match AnvilBlock::damage(state_id) {
+                Some(damaged) => self.block_state_id.store(damaged),
+                None => self.cancel_drop.store(true, Ordering::Relaxed),
+            }
+        }
+    }
+
+    /// Places the block at `landing_pos`, or breaks it there when it cannot stay.
+    fn land(
+        &self,
+        world: &Arc<World>,
+        block: &Block,
+        landing_pos: BlockPos,
+        current_state: &BlockState,
+        stuck_in_water: bool,
+    ) {
+        let entity = &self.entity;
+        let mut state_id = self.block_state_id.load();
+        let (below_block, below_state) = world.get_block_and_state(&landing_pos.down());
+        let may_replace =
+            can_replace_with_other_block(Block::from_state_id(current_state.id), current_state);
+        // Concrete powder caught by water stays there even with nothing underneath.
+        let would_continue_falling =
+            FallingBlock::can_fall_through(below_state, below_block) && !stuck_in_water;
+        let would_survive = world.block_registry.can_place_at(
+            None,
+            Some(&**world),
+            &**world,
+            None,
+            Block::from_state_id(state_id),
+            state_id.to_state(),
+            &landing_pos,
+            None,
+            None,
+        ) && !would_continue_falling;
+        if !(may_replace && would_survive) {
+            self.break_and_drop(world, block, landing_pos);
+            return;
+        }
+        if let Some(concrete) = FallingBlock::concrete_of(Block::from_state_id(state_id))
+            && FallingBlock::should_solidify(&**world, &landing_pos)
+        {
+            state_id = concrete.default_state.id;
+        }
+        let place_block = Block::from_state_id(state_id);
+        // Only a water source waterlogs, flowing water does not.
+        if place_block.is_waterloggable()
+            && {
+                let (fluid, fluid_state) = world.get_fluid_and_fluid_state(&landing_pos);
+                fluid_state.is_source && fluid.matches_type(&Fluid::WATER)
+            }
+            && let Some(waterlogged) = place_block.set_waterlogged(state_id, true)
+        {
+            state_id = waterlogged;
+        }
+        if world.cancelled_by_plugin(|| {
+            EntityChangeBlockEvent::new(
+                entity.entity_id,
+                landing_pos,
+                Block::from_state_id(state_id).to_resource_location(),
+            )
+        }) || world
+            .set_block_state_if(&landing_pos, state_id, BlockFlags::NOTIFY_ALL, |now| {
+                now == current_state.id
+            })
+            .is_none()
+        {
+            // Vanilla drops the block when `setBlock` refuses; here also when the cell changed under the event.
+            self.break_and_drop(world, block, landing_pos);
+            return;
+        }
+        self.on_land(world, place_block, landing_pos);
+        self.apply_block_data(world, landing_pos);
+        // block updates to watchers before the despawn, else a invisible block gap until the tick flush.
+        let placed = world.get_block_state_id(&landing_pos);
+        world.send_to_tracking_players_editioned(
+            entity,
+            &CBlockUpdate::new(landing_pos, i32::from(placed.as_u16()).into()),
+            &CUpdateBlock::new(landing_pos, BlockState::to_be_network_id(placed)),
+        );
     }
 }
 
@@ -184,89 +416,62 @@ impl EntityBase for FallingEntity {
 
         entity.velocity.store(velo);
 
-        // TODO: vanilla treats concrete powder in water as still falling (`isStuckInWater`, plus a source-fluid clip above speed 1).
+        // Vanilla reads the block once, before the move: a landing that wears an anvil down
+        // still breaks and drops as the anvil it was.
+        let block = Block::from_state_id(self.block_state_id.load());
+        let world = entity.world.load();
+        let before = entity.pos.load();
         entity.move_entity(caller, velo);
+        self.check_fall_damage(&world, entity.pos.load().y - before.y);
         entity.tick_block_collisions(caller);
-        if entity.on_ground.load(Ordering::Relaxed) {
+
+        let mut landing_pos = entity.block_pos.load();
+        let is_concrete_powder = FallingBlock::concrete_of(block).is_some();
+        // Concrete powder hardens in the first water it enters instead of sinking through it.
+        let mut stuck_in_water = is_concrete_powder
+            && world
+                .get_fluid(&landing_pos)
+                .has_tag(&tag::Fluid::MINECRAFT_WATER);
+        if is_concrete_powder && entity.velocity.load().length_squared() > 1.0 {
+            // Faster than a block a tick: find the water source it flew through.
+            let hit = world.clip(&ClipContext::new(
+                before,
+                entity.pos.load(),
+                ClipBlock::Collider,
+                ClipFluid::SourceOnly,
+            ));
+            if !hit.is_miss
+                && world
+                    .get_fluid(&hit.block_pos)
+                    .has_tag(&tag::Fluid::MINECRAFT_WATER)
+            {
+                landing_pos = hit.block_pos;
+                stuck_in_water = true;
+            }
+        }
+
+        if entity.on_ground.load(Ordering::Relaxed) || stuck_in_water {
             entity
                 .velocity
                 .store(entity.velocity.load().multiply(0.7, -0.5, 0.7));
-            let world = entity.world.load();
-            let landing_pos = self.entity.block_pos.load();
             let (current_block, current_state) = world.get_block_and_state(&landing_pos);
             // Vanilla waits until a piston has finished moving a block through the landing cell.
             if current_block != &Block::MOVING_PISTON {
-                let mut state_id = self.block_state_id.load();
-                let block = Block::from_state_id(state_id);
-                let (below_block, below_state) = world.get_block_and_state(&landing_pos.down());
-                let may_replace = can_replace_with_other_block(current_block, current_state);
-                let would_continue_falling =
-                    FallingBlock::can_fall_through(below_state, below_block);
-                let would_survive = world.block_registry.can_place_at(
-                    None,
-                    Some(&**world),
-                    &**world,
-                    None,
-                    block,
-                    state_id.to_state(),
-                    &landing_pos,
-                    None,
-                    None,
-                ) && !would_continue_falling;
                 if self.cancel_drop.load(Ordering::Relaxed) {
-                    // Vanilla `cancelDrop`: the entity just disappears.
-                    // TODO: vanilla also calls `Fallable.onBrokenAfterFall` (break particles and sound, anvil destroy sound).
-                } else if may_replace && would_survive {
-                    if let Some(concrete) = FallingBlock::concrete_of(block)
-                        && FallingBlock::should_solidify(&**world, &landing_pos)
-                    {
-                        state_id = concrete.default_state.id;
-                    }
-                    let place_block = Block::from_state_id(state_id);
-                    // TODO: vanilla waterlogs only for source water (`Fluids.WATER`), this tag also matches flowing water.
-                    if place_block.is_waterloggable()
-                        && world
-                            .get_fluid(&landing_pos)
-                            .has_tag(&tag::Fluid::MINECRAFT_WATER)
-                        && let Some(waterlogged) = place_block.set_waterlogged(state_id, true)
-                    {
-                        state_id = waterlogged;
-                    }
-                    if world.cancelled_by_plugin(|| {
-                        EntityChangeBlockEvent::new(
-                            entity.entity_id,
-                            landing_pos,
-                            Block::from_state_id(state_id).to_resource_location(),
-                        )
-                    }) || world
-                        .set_block_state_if(&landing_pos, state_id, BlockFlags::NOTIFY_ALL, |now| {
-                            now == current_state.id
-                        })
-                        .is_none()
-                    {
-                        // Vanilla drops the block when `setBlock` refuses; here also when the cell changed under the event.
-                        self.drop_as_item();
-                    } else {
-                        self.apply_block_data(&world, landing_pos);
-                        // block updates to watchers before the despawn, else a invisible block gap until the tick flush.
-                        let placed = world.get_block_state_id(&landing_pos);
-                        world.send_to_tracking_players_editioned(
-                            entity,
-                            &CBlockUpdate::new(landing_pos, i32::from(placed.as_u16()).into()),
-                            &CUpdateBlock::new(landing_pos, BlockState::to_be_network_id(placed)),
-                        );
-                    }
+                    // Vanilla `cancelDrop`: neither block nor item, only the breaking effect.
+                    self.on_broken_after_fall(&world, block, landing_pos);
                 } else {
-                    self.drop_as_item();
+                    self.land(&world, block, landing_pos, current_state, stuck_in_water);
                 }
                 self.entity.remove();
             }
         } else {
-            let pos = entity.block_pos.load();
-            let world = entity.world.load();
-            let out_of_world = pos.0.y <= world.get_bottom_y() || pos.0.y > world.get_top_y();
+            let out_of_world =
+                landing_pos.0.y <= world.get_bottom_y() || landing_pos.0.y > world.get_top_y();
             if (time > TIME_OUT_OF_WORLD && out_of_world) || time > TIME_MAX {
-                self.drop_as_item();
+                if self.drops_items(&world) {
+                    self.spawn_item(block);
+                }
                 self.entity.remove();
             }
         }
@@ -284,6 +489,9 @@ impl EntityBase for FallingEntity {
         nbt.put_int("Time", self.time.load(Ordering::Relaxed));
         nbt.put_bool("DropItem", self.drop_item.load(Ordering::Relaxed));
         nbt.put_bool("CancelDrop", self.cancel_drop.load(Ordering::Relaxed));
+        nbt.put_bool("HurtEntities", self.hurt_entities.load(Ordering::Relaxed));
+        nbt.put_float("FallHurtAmount", self.fall_damage_per_distance.load());
+        nbt.put_int("FallHurtMax", self.fall_damage_max.load(Ordering::Relaxed));
         if let Some(data) = self
             .block_data
             .lock()
@@ -306,6 +514,19 @@ impl EntityBase for FallingEntity {
             .store(nbt.get_bool("DropItem").unwrap_or(true), Ordering::Relaxed);
         self.cancel_drop.store(
             nbt.get_bool("CancelDrop").unwrap_or(false),
+            Ordering::Relaxed,
+        );
+        // Vanilla: a falling anvil hurts unless told otherwise.
+        let is_anvil = Block::from_state_id(state_id).has_tag(&tag::Block::MINECRAFT_ANVIL);
+        self.hurt_entities.store(
+            nbt.get_bool("HurtEntities").unwrap_or(is_anvil),
+            Ordering::Relaxed,
+        );
+        self.fall_damage_per_distance
+            .store(nbt.get_float("FallHurtAmount").unwrap_or(0.0));
+        self.fall_damage_max.store(
+            nbt.get_numeric_int("FallHurtMax")
+                .unwrap_or(DEFAULT_FALL_DAMAGE_MAX),
             Ordering::Relaxed,
         );
         *self

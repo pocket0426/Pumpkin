@@ -24,12 +24,18 @@ pub fn run_vex_charge_test(
         other.set_gamemode(GameMode::Creative);
     }
     let origin = player.get_entity().block_pos.load();
+    // An open, floored cell for the bot (rough terrain could hurt it on its own), a stone
+    // ceiling two blocks thick over it, and open air above that for the vex.
     let mut previous = Vec::new();
     for dx in -1..=1 {
         for dz in -1..=1 {
-            for dy in 3..=7 {
+            for dy in -1..=7 {
                 let pos = origin.offset(Vector3::new(dx, dy, dz));
-                let block = if dy <= 4 { &Block::STONE } else { &Block::AIR };
+                let block = if dy == -1 || dy == 3 || dy == 4 {
+                    &Block::STONE
+                } else {
+                    &Block::AIR
+                };
                 previous.push((pos, world.get_block_state_id(&pos)));
                 world.set_block_state(&pos, block.default_state.id, BlockFlags::NOTIFY_ALL);
             }
@@ -52,13 +58,22 @@ pub fn run_vex_charge_test(
     let mut charged = false;
     let mut was_inside_stone = false;
     let mut hurt = false;
-    for _ in 0..300 {
+    let mut health = health_before;
+    for _ in 0..400 {
         server.tick();
         charged |= vex.is_charging();
-        let vex_block = vex.get_entity().block_pos.load();
-        was_inside_stone |= world.get_block(&vex_block) == &Block::STONE;
-        if player.living_entity.health.load() < health_before {
-            hurt = true;
+        let vex_entity = vex.get_entity();
+        was_inside_stone |= world.get_block(&vex_entity.block_pos.load()) == &Block::STONE;
+        // Only a hit taken with the vex on top of the player counts as the vex's.
+        let now = player.living_entity.health.load();
+        let vex_is_close = vex_entity
+            .pos
+            .load()
+            .squared_distance_to_vec(&player.get_entity().pos.load())
+            < 9.0;
+        hurt |= now < health && vex_is_close;
+        health = now;
+        if charged && was_inside_stone && hurt {
             break;
         }
     }

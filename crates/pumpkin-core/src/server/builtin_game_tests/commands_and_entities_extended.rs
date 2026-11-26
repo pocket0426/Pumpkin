@@ -1,6 +1,7 @@
 use pumpkin_data::{
     Block,
-    block_properties::{CommandBlockLikeProperties, Facing},
+    block_properties::{CommandBlockLikeProperties, Facing, ScaffoldingLikeProperties},
+    tag::{self, Taggable},
 };
 use pumpkin_gametest::{GameTestHelper, GameTestResult};
 use pumpkin_nbt::NbtCompound;
@@ -348,6 +349,128 @@ pub(super) async fn test_item_entities_different_types_do_not_merge(
         .then_idle(10)
         .then_execute(move |helper| async move {
             helper.assert_entities_present("minecraft:item", 2).await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// Glass on the four sides of the column at (2, y, 2), so what is inside stays inside.
+async fn build_glass_shaft(
+    helper: &GameTestHelper,
+    levels: std::ops::RangeInclusive<i32>,
+) -> GameTestResult<()> {
+    for y in levels {
+        for (x, z) in [(1, 2), (3, 2), (2, 1), (2, 3)] {
+            helper
+                .set_block_default(&BlockPos::new(x, y, z), &Block::GLASS)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Vanilla `FallingBlockEntity.causeFallDamage`: a falling anvil hurts what it lands on,
+/// 2 a block fallen. Four blocks are enough for a chicken.
+pub(super) async fn test_falling_anvil_kills_chicken_below(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 5).await?;
+    build_glass_shaft(&helper, 1..=2).await?;
+    let landing = BlockPos::new(2, 1, 2);
+    helper.spawn_entity("minecraft:chicken", &landing).await?;
+    helper
+        .set_block_default(&BlockPos::new(2, 5, 2), &Block::ANVIL)
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(60)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_entity_not_present("minecraft:chicken")
+                .await?;
+            // The landing may have chipped it.
+            let landed = Block::from_state_id(helper.block_state_id(&landing).await);
+            helper.assert_true(
+                landed.has_tag(&tag::Block::MINECRAFT_ANVIL),
+                format!("expected an anvil where it landed, found {}", landed.name),
+            )
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// Vanilla `isStuckInWater`: concrete powder hardens in the first water it falls into
+/// instead of sinking to the bottom.
+pub(super) async fn test_falling_concrete_powder_hardens_at_water_surface(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 5).await?;
+    build_glass_shaft(&helper, 1..=3).await?;
+    for y in 1..=3 {
+        helper
+            .set_block_default(&BlockPos::new(2, y, 2), &Block::WATER)
+            .await?;
+    }
+    helper
+        .set_block_default(&BlockPos::new(2, 5, 2), &Block::WHITE_CONCRETE_POWDER)
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(30)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_block_present(&BlockPos::new(2, 3, 2), &Block::WHITE_CONCRETE)
+                .await?;
+            helper
+                .assert_block_present(&BlockPos::new(2, 2, 2), &Block::WATER)
+                .await?;
+            helper
+                .assert_block_present(&BlockPos::new(2, 1, 2), &Block::WATER)
+                .await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// Vanilla waterlogs a landing block only in a water source (`Fluids.WATER`), not in
+/// water flowing past.
+pub(super) async fn test_falling_scaffolding_stays_dry_in_flowing_water(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 5).await?;
+    // A source boxed in on three sides, flowing out over the landing spot.
+    for (x, z) in [(0, 2), (1, 1), (1, 3)] {
+        helper
+            .set_block_default(&BlockPos::new(x, 1, z), &Block::GLASS)
+            .await?;
+    }
+    helper
+        .set_block_default(&BlockPos::new(1, 1, 2), &Block::WATER)
+        .await?;
+    let landing = BlockPos::new(2, 1, 2);
+
+    helper
+        .start_sequence()
+        .then_idle(15)
+        .then_execute(move |helper| async move {
+            helper.assert_block_present(&landing, &Block::WATER).await?;
+            helper
+                .set_block_default(&BlockPos::new(2, 4, 2), &Block::SCAFFOLDING)
+                .await
+        })
+        .then_idle(40)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_block_present(&landing, &Block::SCAFFOLDING)
+                .await?;
+            let props =
+                ScaffoldingLikeProperties::from_state_id(helper.block_state_id(&landing).await);
+            helper.assert_false(
+                props.waterlogged,
+                "scaffolding that landed in flowing water must not be waterlogged",
+            )
         })
         .then_succeed();
     Ok(())

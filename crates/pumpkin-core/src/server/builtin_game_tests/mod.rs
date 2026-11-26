@@ -261,6 +261,9 @@ const BUILTIN_TEST_IDS: &[&str] = &[
     "pumpkin:auto_command_block_executes_without_redstone",
     "pumpkin:falling_gravel_and_red_sand_land",
     "pumpkin:falling_concrete_powder_and_anvil_land",
+    "pumpkin:falling_anvil_kills_chicken_below",
+    "pumpkin:falling_concrete_powder_hardens_at_water_surface",
+    "pumpkin:falling_scaffolding_stays_dry_in_flowing_water",
     "pumpkin:tnt_primed_by_redstone_torch",
     "pumpkin:snow_golem_horizontal_pattern_spawns",
     "pumpkin:iron_golem_pattern_clears_all_four_blocks",
@@ -1741,6 +1744,27 @@ pub fn ensure_builtin_game_tests_registered() {
             60,
             0,
             commands_and_entities_extended::test_falling_concrete_powder_solidifies_in_water,
+        );
+        register_function_test(
+            "pumpkin:falling_anvil_kills_chicken_below",
+            "pumpkin:empty_5x6x5",
+            100,
+            0,
+            commands_and_entities_extended::test_falling_anvil_kills_chicken_below,
+        );
+        register_function_test(
+            "pumpkin:falling_concrete_powder_hardens_at_water_surface",
+            "pumpkin:empty_5x6x5",
+            60,
+            0,
+            commands_and_entities_extended::test_falling_concrete_powder_hardens_at_water_surface,
+        );
+        register_function_test(
+            "pumpkin:falling_scaffolding_stays_dry_in_flowing_water",
+            "pumpkin:empty_5x6x5",
+            100,
+            0,
+            commands_and_entities_extended::test_falling_scaffolding_stays_dry_in_flowing_water,
         );
         register_function_test(
             "pumpkin:tnt_primed_by_redstone_torch",

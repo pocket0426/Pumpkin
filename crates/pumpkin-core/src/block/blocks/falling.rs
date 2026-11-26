@@ -145,6 +145,11 @@ impl BlockBehaviour for FallingBlock {
             return;
         }
         let state = args.world.get_block_state(args.position);
-        FallingEntity::replace_spawn(args.world, *args.position, state.id);
+        if let Some(falling) = FallingEntity::replace_spawn(args.world, *args.position, state.id)
+            && args.block.has_tag(&tag::Block::MINECRAFT_ANVIL)
+        {
+            // Vanilla `AnvilBlock.falling`: 2 damage a block fallen, 40 at most.
+            falling.set_hurts_entities(2.0, 40);
+        }
     }
 }
