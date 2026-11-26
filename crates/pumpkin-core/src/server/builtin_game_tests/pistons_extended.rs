@@ -1,9 +1,11 @@
 use pumpkin_data::{
     Block, BlockStateId,
-    block_properties::{Facing, RedstoneOreLikeProperties, StickyPistonLikeProperties},
+    block_properties::{
+        Facing, RedstoneOreLikeProperties, StickyPistonLikeProperties, WhiteWoolSlabLikeProperties,
+    },
 };
 use pumpkin_gametest::{GameTestHelper, GameTestResult};
-use pumpkin_util::math::position::BlockPos;
+use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
 
 use super::build_stone_floor;
 
@@ -438,6 +440,236 @@ pub(super) async fn test_sticky_piston_pulls_redstone_block_cuts_power(
                 !lit,
                 "Expected lamp to turn off after sticky piston retracted redstone_block",
             )
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// Vanilla `moveCollidedEntities`: the head pushes what stands in its way.
+pub(super) async fn test_piston_pushes_entity_ahead(helper: GameTestHelper) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 4).await?;
+    let piston = BlockPos::new(1, 1, 1);
+    helper
+        .set_block(&piston, piston_state(&Block::PISTON, Facing::East))
+        .await?;
+    helper
+        .spawn_entity("minecraft:armor_stand", &BlockPos::new(2, 1, 1))
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(5)
+        .then_execute(move |helper| async move {
+            helper
+                .set_block_default(&piston.up(), &Block::REDSTONE_BLOCK)
+                .await
+        })
+        .then_idle(6)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_entity_present_at("minecraft:armor_stand", &BlockPos::new(3, 1, 1))
+                .await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// Vanilla `moveStuckEntities`: a honey block pushed sideways takes along what stands on it.
+pub(super) async fn test_pushed_honey_block_carries_entity(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 4).await?;
+    // One block up: honey resting on the floor would drag the floor along
+    let piston = BlockPos::new(1, 2, 1);
+    helper
+        .set_block(&piston, piston_state(&Block::PISTON, Facing::East))
+        .await?;
+    helper
+        .set_block_default(&BlockPos::new(2, 2, 1), &Block::HONEY_BLOCK)
+        .await?;
+    helper
+        .spawn_entity_at(
+            "minecraft:armor_stand",
+            Vector3::new(2.5, 2.0 + 15.0 / 16.0, 1.5),
+        )
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(10)
+        .then_execute(move |helper| async move {
+            helper
+                .set_block_default(&piston.up(), &Block::REDSTONE_BLOCK)
+                .await
+        })
+        .then_idle(6)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_block_present(&BlockPos::new(3, 2, 1), &Block::HONEY_BLOCK)
+                .await?;
+            helper
+                .assert_entity_present_in_box(
+                    "minecraft:armor_stand",
+                    BlockPos::new(3, 2, 1),
+                    BlockPos::new(4, 4, 2),
+                )
+                .await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// The counterpart of the honey block: an ordinary block slides away under what stands on it.
+/// The moving block stays solid on the way, so the entity is neither carried nor swallowed.
+pub(super) async fn test_pushed_plain_block_leaves_entity_behind(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 4).await?;
+    let piston = BlockPos::new(1, 2, 1);
+    helper
+        .set_block(&piston, piston_state(&Block::PISTON, Facing::East))
+        .await?;
+    helper
+        .set_block_default(&BlockPos::new(2, 2, 1), &Block::GOLD_BLOCK)
+        .await?;
+    helper
+        .spawn_entity("minecraft:armor_stand", &BlockPos::new(2, 3, 1))
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(10)
+        .then_execute(move |helper| async move {
+            helper
+                .set_block_default(&piston.up(), &Block::REDSTONE_BLOCK)
+                .await
+        })
+        .then_idle(20)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_block_present(&BlockPos::new(3, 2, 1), &Block::GOLD_BLOCK)
+                .await?;
+            // Dropped straight down once the block was gone from under it, onto the
+            // piston's arm
+            helper
+                .assert_entity_present_at("minecraft:armor_stand", &BlockPos::new(2, 2, 1))
+                .await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// Vanilla `PistonMovingBlockEntity.tick`: a block that cannot stay where it was pushed breaks
+/// on arrival and drops its loot.
+pub(super) async fn test_pushed_rail_without_support_drops(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 4).await?;
+    let piston = BlockPos::new(1, 2, 1);
+    let rail = BlockPos::new(2, 2, 1);
+    let dest = BlockPos::new(3, 2, 1);
+    helper
+        .set_block_default(&rail.down(), &Block::STONE)
+        .await?;
+    helper.set_block_default(&rail, &Block::RAIL).await?;
+    helper
+        .set_block(&piston, piston_state(&Block::PISTON, Facing::East))
+        .await?;
+    helper
+        .set_block_default(&piston.up(), &Block::REDSTONE_BLOCK)
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(6)
+        .then_execute(move |helper| async move {
+            helper.assert_block_present(&dest, &Block::AIR).await?;
+            helper
+                .assert_item_entity_present("minecraft:rail", &dest, 2.0)
+                .await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// Vanilla `PistonMovingBlockEntity.tick`: a waterlogged block arrives dry.
+pub(super) async fn test_pushed_waterlogged_slab_arrives_dry(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    build_stone_floor(&helper, 5, 4).await?;
+    let piston = BlockPos::new(1, 1, 1);
+    let dest = BlockPos::new(3, 1, 1);
+    let mut slab = WhiteWoolSlabLikeProperties::default(&Block::STONE_SLAB);
+    slab.waterlogged = true;
+    let wet = slab.to_state_id(&Block::STONE_SLAB);
+    slab.waterlogged = false;
+    let dry = slab.to_state_id(&Block::STONE_SLAB);
+    helper.set_block(&BlockPos::new(2, 1, 1), wet).await?;
+    helper
+        .set_block(&piston, piston_state(&Block::PISTON, Facing::East))
+        .await?;
+    helper
+        .set_block_default(&piston.up(), &Block::REDSTONE_BLOCK)
+        .await?;
+
+    helper
+        .start_sequence()
+        .then_idle(6)
+        .then_execute(move |helper| async move { helper.assert_block_state(&dest, dry).await })
+        .then_succeed();
+    Ok(())
+}
+
+async fn sticky_piston_pulse(helper: &GameTestHelper, pulse: u32) -> GameTestResult<()> {
+    build_stone_floor(helper, 4, 4).await?;
+    helper
+        .set_block(
+            &BlockPos::new(1, 1, 1),
+            piston_state(&Block::STICKY_PISTON, Facing::Up),
+        )
+        .await?;
+    helper
+        .set_block_default(&BlockPos::new(1, 2, 1), &Block::EMERALD_BLOCK)
+        .await?;
+    helper.pulse_redstone(&BlockPos::new(2, 1, 1), pulse).await
+}
+
+/// Vanilla `triggerEvent`: a sticky piston that loses power while its block is still on the way
+/// out leaves the block where it lands.
+pub(super) async fn test_sticky_piston_short_pulse_leaves_block(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    sticky_piston_pulse(&helper, 2).await?;
+    helper
+        .start_sequence()
+        .then_idle(10)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_block_present(&BlockPos::new(1, 3, 1), &Block::EMERALD_BLOCK)
+                .await?;
+            helper
+                .assert_block_present(&BlockPos::new(1, 2, 1), &Block::AIR)
+                .await
+        })
+        .then_succeed();
+    Ok(())
+}
+
+/// One tick longer and the block has arrived, so it is pulled back.
+pub(super) async fn test_sticky_piston_longer_pulse_pulls_block_back(
+    helper: GameTestHelper,
+) -> GameTestResult<()> {
+    sticky_piston_pulse(&helper, 3).await?;
+    helper
+        .start_sequence()
+        .then_idle(10)
+        .then_execute(move |helper| async move {
+            helper
+                .assert_block_present(&BlockPos::new(1, 2, 1), &Block::EMERALD_BLOCK)
+                .await?;
+            helper
+                .assert_block_present(&BlockPos::new(1, 3, 1), &Block::AIR)
+                .await
         })
         .then_succeed();
     Ok(())

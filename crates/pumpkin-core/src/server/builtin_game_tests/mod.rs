@@ -156,6 +156,13 @@ const BUILTIN_TEST_IDS: &[&str] = &[
     "pumpkin:fence_horizontal_connections",
     "pumpkin:iron_bars_and_glass_pane_connections",
     // pistons_extended (12)
+    "pumpkin:piston_pushes_entity_ahead",
+    "pumpkin:pushed_honey_block_carries_entity",
+    "pumpkin:pushed_plain_block_leaves_entity_behind",
+    "pumpkin:pushed_rail_without_support_drops",
+    "pumpkin:pushed_waterlogged_slab_arrives_dry",
+    "pumpkin:sticky_piston_short_pulse_leaves_block",
+    "pumpkin:sticky_piston_longer_pulse_pulls_block_back",
     "pumpkin:piston_pushes_upward_and_retracts",
     "pumpkin:piston_pushes_downward_and_retracts",
     "pumpkin:piston_pushes_north_and_south",
@@ -1062,6 +1069,55 @@ pub fn ensure_builtin_game_tests_registered() {
             30,
             0,
             pistons_extended::test_piston_pushes_west_and_east,
+        );
+        register_function_test(
+            "pumpkin:piston_pushes_entity_ahead",
+            "pumpkin:empty_5x6x5",
+            40,
+            0,
+            pistons_extended::test_piston_pushes_entity_ahead,
+        );
+        register_function_test(
+            "pumpkin:pushed_plain_block_leaves_entity_behind",
+            "pumpkin:empty_5x6x5",
+            50,
+            0,
+            pistons_extended::test_pushed_plain_block_leaves_entity_behind,
+        );
+        register_function_test(
+            "pumpkin:pushed_honey_block_carries_entity",
+            "pumpkin:empty_5x6x5",
+            40,
+            0,
+            pistons_extended::test_pushed_honey_block_carries_entity,
+        );
+        register_function_test(
+            "pumpkin:pushed_rail_without_support_drops",
+            "pumpkin:empty_5x6x5",
+            30,
+            0,
+            pistons_extended::test_pushed_rail_without_support_drops,
+        );
+        register_function_test(
+            "pumpkin:pushed_waterlogged_slab_arrives_dry",
+            "pumpkin:empty_5x6x5",
+            30,
+            0,
+            pistons_extended::test_pushed_waterlogged_slab_arrives_dry,
+        );
+        register_function_test(
+            "pumpkin:sticky_piston_short_pulse_leaves_block",
+            "pumpkin:empty_5x6x5",
+            30,
+            0,
+            pistons_extended::test_sticky_piston_short_pulse_leaves_block,
+        );
+        register_function_test(
+            "pumpkin:sticky_piston_longer_pulse_pulls_block_back",
+            "pumpkin:empty_5x6x5",
+            30,
+            0,
+            pistons_extended::test_sticky_piston_longer_pulse_pulls_block_back,
         );
         register_function_test(
             "pumpkin:sticky_piston_pulls_upward_and_downward",

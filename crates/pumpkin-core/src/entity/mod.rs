@@ -1708,6 +1708,9 @@ pub struct Entity {
     pub synched_data: synched_entity_data::SynchedEntityData,
     /// Multiplies movement for one tick before being reset
     pub movement_multiplier: AtomicCell<Vector3<f64>>,
+    /// Vanilla `pistonDeltas` with `pistonDeltasGameTime`: how far pistons moved this entity on
+    /// each axis during one game tick.
+    piston_deltas: std::sync::Mutex<([f64; 3], i64)>,
     /// Vanilla `needsSync`: tracker resyncs position and velocity of entities
     pub velocity_dirty: AtomicBool,
     /// velocity goes to the own client
@@ -1916,6 +1919,7 @@ impl Entity {
             movement: AtomicCell::new(Vector3::default()),
             block_pos: AtomicCell::new(BlockPos(Vector3::new(floor_x, floor_y, floor_z))),
             supporting_block_pos: AtomicCell::new(None),
+            piston_deltas: std::sync::Mutex::new(([0.0; 3], i64::MIN)),
             chunk_pos: AtomicCell::new(Vector2::new(
                 get_section_cord(floor_x),
                 get_section_cord(floor_z),
@@ -3354,6 +3358,58 @@ impl Entity {
             .jump_velocity_multiplier;
 
         if f == 1f32 { g } else { f }
+    }
+
+    /// Vanilla `Entity.limitPistonMovement`: all pistons together move an entity at most 0.51
+    /// along an axis per game tick.
+    fn limit_piston_movement(&self, motion: Vector3<f64>) -> Vector3<f64> {
+        const MAX_PER_TICK: f64 = 0.51;
+        if motion.length_squared() <= 1.0e-7 {
+            return motion;
+        }
+        let time = self.world.load().get_world_age();
+        let mut state = self
+            .piston_deltas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.1 != time {
+            *state = ([0.0; 3], time);
+        }
+        let (axis, wanted) = if motion.x != 0.0 {
+            (0, motion.x)
+        } else if motion.y != 0.0 {
+            (1, motion.y)
+        } else if motion.z != 0.0 {
+            (2, motion.z)
+        } else {
+            return Vector3::default();
+        };
+        let total = (wanted + state.0[axis]).clamp(-MAX_PER_TICK, MAX_PER_TICK);
+        let allowed = total - state.0[axis];
+        state.0[axis] = total;
+        drop(state);
+        let mut limited = Vector3::default();
+        if allowed.abs() > 1.0e-5 {
+            match axis {
+                0 => limited.x = allowed,
+                1 => limited.y = allowed,
+                _ => limited.z = allowed,
+            }
+        }
+        limited
+    }
+
+    /// Vanilla `Entity.move(MoverType.PISTON, ..)`.
+    pub fn move_by_piston(&self, caller: &dyn EntityBase, motion: Vector3<f64>) {
+        if self.no_physics.load(Ordering::Relaxed) {
+            self.move_entity(caller, motion);
+            return;
+        }
+        let motion = self.limit_piston_movement(motion);
+        if motion == Vector3::default() {
+            return;
+        }
+        self.move_entity(caller, motion);
     }
 
     pub fn move_pos(&self, delta: Vector3<f64>) {

@@ -14,7 +14,7 @@
 - 완료: 항목 1, 2(2a·2b·2c), 3, 4, 5, 6, 린트 정리, 일광 감지기 패닉 방어, **피글린·피글린 브루트 AI의 바닐라 Brain 전환** (14번 기록, 업스트림 PR #3630을 가져와 맞춤).
 - 완료: 항목 7(호퍼 즉시 흡수, 15번 기록).
 - 완료: 항목 8(드립스톤, 16번 기록).
-- 진행 중: 항목 9(피스톤). 9a(월드 경계 검사) 완료, 9b·9c·9d 대기 (17번 기록).
+- 완료: 항목 9(피스톤, 17번 기록). 처음 정한 쉬운 항목 목록 1~9가 모두 끝났습니다.
 - 작업 기준(사용자 요청): 동작은 바닐라와 같아야 하고, 자주 호출되는 경로의 비용을 늘리지 않는다.
 
 ## 작업 방법 (이 환경 기준)
@@ -54,7 +54,7 @@ cargo run --locked -p pumpkin-tester      # 게임 테스트 전체 (약 1분 + 
 | 6 | 물 공급원 판정에 켈프·해초·거품 기둥 포함 | `fluid/flowing_trait.rs` | **완료** |
 | 7 | 호퍼가 위에 닿은 아이템을 즉시 흡수 (`HopperBlock.entityInside`) | `hopper.rs` | **완료** (15번 기록) |
 | 8 | 뾰족 드립스톤 성장·액체 전달 | `dripstone.rs` | **완료** (업스트림이 이미 구현, 빠진 한 가지만 보완. 16번 기록) |
-| 9 | 피스톤 남은 검사들 | `piston/*.rs` | **9a 완료**, 9b·9c·9d 대기 (17번 기록) |
+| 9 | 피스톤 남은 검사들 | `piston/*.rs` | **완료** (17번 기록) |
 
 보류: `tripwire.rs:108`의 "가위 내구도 1 감소" TODO. 바닐라에서는 철사 블록이 아니라 가위 아이템의 채굴 처리 쪽에서 내구도가 깎이는 것으로 기억하는데, 소스로 확인하기 전에는 건드리지 않습니다(이중 차감 위험).
 
@@ -297,27 +297,57 @@ cargo run --locked -p pumpkin-tester      # 게임 테스트 전체 (약 1분 + 
 
 테스트: 봇 `bot:dripstone_dries_mud_and_lifts_entity` (진흙 위 갑옷 거치대가 0.125 올라가는지). 밀어 올리기를 빼면 실패하는 것을 확인했습니다.
 
-### 17. 항목 9: 피스톤 — 9a 완료, 나머지 대기
+### 17. 항목 9: 피스톤 — 완료
 
-바닐라 26.3과 대조해 찾은 차이를 네 덩어리로 나눴습니다.
+바닐라 26.3(`PistonBaseBlock`, `PistonMovingBlockEntity`, `PistonMath`, `Entity.limitPistonMovement` 바이트코드)과 대조해 찾은 차이를 모두 처리했습니다.
 
 | 번호 | 내용 | 바닐라 | 상태 |
 |---|---|---|---|
-| 9a | 밀 수 있는지 판정에 월드 높이·월드 경계 검사 | `PistonBaseBlock.isPushable` | **완료** |
-| 9b | 수축 시 "너무 빨리 접힘" 판정의 나머지 조건 (`gameTime == lastTicked`, `isHandlingTick`) | `PistonBaseBlock.checkIfExtend` | 대기 |
-| 9c | 움직이는 블록이 엔티티를 미는 처리 전체: 플레이어 포함, 슬라임 튕김, 꿀 블록에 붙어 끌려감, 피스톤 몸통 안에 낀 엔티티 보정 | `PistonMovingBlockEntity.moveCollidedEntities`, `moveStuckEntities`, `fixEntityWithinPistonBase` | 대기 (가장 큼) |
-| 9d | 움직이는 중인 블록의 저장·불러오기 (`from_nbt`, `write_nbt`가 TODO) | `PistonMovingBlockEntity.loadAdditional`, `saveAdditional` | 대기 |
+| 9a | 밀 수 있는지 판정에 월드 높이·월드 경계 검사 | `PistonBaseBlock.isPushable` | 완료 |
+| 9b | 끈끈이 피스톤이 블록을 두고 오는 조건 | `checkIfExtend`, `triggerEvent` | 완료 |
+| 9c | 움직이는 블록이 엔티티를 미는 처리 | `moveCollidedEntities`, `moveStuckEntities`, `fixEntityWithinPistonBase` | 완료 |
+| 9d | 움직이는 중인 블록의 저장·불러오기 | `loadAdditional`, `saveAdditional` | 완료 |
+| 9e | 움직이는 블록의 충돌 판정 (조사 중 추가로 발견) | `PistonMovingBlockEntity.getCollisionShape` | 완료 |
+| 9f | 도착 처리: 버틸 수 없는 블록은 부서져 드롭, 물에 잠긴 블록은 마른 채 도착, 자기 자신에게 이웃 갱신 | `PistonMovingBlockEntity.tick`, `finalTick` | 완료 |
 
-9a 세부:
-- 위치가 월드 높이 밖이거나 월드 경계 밖이면 공기여도 밀 수 없음. 그래서 최상단에서 위를 보는 피스톤은 뻗지 못합니다(이전에는 뻗었음).
-- 최하단 블록을 아래로, 최상단 블록을 위로 미는 것은 불가.
-- 월드 경계는 바닐라처럼 블록의 최소 꼭짓점 한 점만 검사합니다.
-- 흑요석 등의 하드코딩 목록은 26.3 바닐라에서 사라졌지만(밀림 반응 데이터로 대체) 결과가 같아 그대로 뒀습니다.
-- 단위 테스트 `nothing_is_pushed_out_of_the_world`.
+9a:
+- 위치가 월드 높이 밖이거나 월드 경계 밖이면 공기여도 밀 수 없음. 최상단에서 위를 보는 피스톤은 뻗지 못합니다(이전에는 뻗었음).
+- 최하단 블록을 아래로, 최상단 블록을 위로 미는 것은 불가. 월드 경계는 바닐라처럼 블록의 최소 꼭짓점 한 점만 검사.
+
+9b:
+- 수축 이벤트를 처리할 때 밀던 블록이 아직 움직이는 중이면, 진행도와 무관하게 그 자리에 내려놓고 끌어오지 않습니다(이전에는 진행도 0.5 미만일 때만). 2틱 펄스로 블록을 "뱉는" 잘 알려진 동작입니다. 3틱 펄스부터는 끌어옵니다.
+- 바닐라의 `isHandlingTick` 조건은 넣지 않았습니다. 바닐라는 블록 이벤트를 같은 틱 안에서 처리하고 Pumpkin은 다음 틱 시작에 처리하는데, 펄스 길이별로 따져 보면 나머지 두 조건(`progress < 0.5`, `gameTime == lastTicked`)만으로 같은 결과가 나옵니다. 코드 주석에 이유를 남겼습니다.
+
+9c:
+- 밀어내는 영역을 바닐라처럼 "앞면이 이번 틱에 지나가는 얇은 판"으로 계산하고, 블록의 실제 충돌 모양(반블록, 계단, 피스톤 머리와 팔)을 씁니다. 이전에는 블록 전체를 직육면체로 보고 머리는 4픽셀 판으로 근사했습니다.
+- 이동은 벽에 막히는 `Entity.move(PISTON)` 방식이고, 한 틱에 축당 0.51까지만 밀립니다(`limitPistonMovement`). 피스톤 여러 개가 같은 엔티티를 동시에 밀 때 두 배로 밀리지 않습니다.
+- 슬라임 블록은 미는 방향으로 속도 1을 줍니다. 꿀 블록은 옆으로 움직일 때 위에 선 엔티티를 데려갑니다.
+- 밀림 반응이 `IGNORE`인 엔티티는 밀지 않습니다.
+- **정정**: 지난 보고에서 "플레이어가 피스톤에 밀리지 않는다"고 했는데 틀렸습니다. 플레이어는 클라이언트가 같은 계산을 직접 하고 위치를 보고하므로 원래부터 밀렸고, 서버가 건드리지 않는 지금 구조가 맞습니다. 슬라임 튕김도 플레이어는 클라이언트 쪽에서 처리됩니다.
+
+9e:
+- 움직이는 블록(`moving_piston`)은 블록 상태에 충돌 모양이 없어서, 이전에는 이동하는 2틱 동안 몹과 아이템이 블록을 통과했습니다. 옆으로 밀리는 블록 위에 서 있던 엔티티가 블록 속으로 떨어진 뒤 같이 밀려갔습니다.
+- 셜커 상자 뚜껑용으로 만든 등록부를 일반화해(`world/dynamic_collisions.rs`) 움직이는 블록의 현재 위치를 충돌에 포함시켰습니다. 수축 중인 피스톤은 몸통도 포함합니다.
+- 움직이는 블록이 없으면 원자값 하나만 읽습니다.
+- 바닐라의 `NOCLIP`(밀리는 엔티티가 자기를 미는 블록에는 막히지 않게 하는 장치)은 따로 두지 않았습니다. 충돌 상자가 밀기 **전** 진행도 기준이라 밀리는 엔티티는 항상 그 앞에 있습니다.
+
+9f:
+- 밀려간 자리에서 버틸 수 없는 블록(받침 없는 레일 등)은 도착 후 부서져 아이템을 떨어뜨립니다.
+- 물에 잠긴 블록은 물 없이 도착합니다.
+- 도착한 블록 자신에게 이웃 갱신을 보내서, 밀려간 피스톤이나 조명이 전원을 다시 읽습니다.
+
+테스트 (게임테스트 7개 추가, 단위 1개):
+- `piston_pushes_entity_ahead`, `pushed_honey_block_carries_entity`, `pushed_plain_block_leaves_entity_behind`, `pushed_rail_without_support_drops`, `pushed_waterlogged_slab_arrives_dry`, `sticky_piston_short_pulse_leaves_block`, `sticky_piston_longer_pulse_pulls_block_back`, 단위 `nothing_is_pushed_out_of_the_world`.
+- 이전 피스톤 코드로 되돌려 돌리면 `pushed_plain_block_leaves_entity_behind`, `pushed_waterlogged_slab_arrives_dry`, `sticky_piston_short_pulse_leaves_block`가 실패합니다. 레일 테스트는 이전 코드에서 실행마다 결과가 달랐습니다. 나머지 셋은 이전 코드에서도 통과하는 회귀 방지용입니다(꿀 블록은 이전 코드에서 엔티티가 블록 속으로 빠진 채 밀려가 같은 칸에 도착했습니다).
+
+게임 안에서 사람이 확인할 것:
+1. 옆으로 밀리는 블록 위에 몹을 세워 두면 블록만 빠져나가고 몹은 제자리에서 떨어지는지. 꿀 블록이면 같이 가는지.
+2. 슬라임 블록으로 몹·아이템을 밀면 튕겨 나가는지.
+3. 관측기 펄스(2틱)로 끈끈이 피스톤이 블록을 뱉는지, 긴 신호에서는 끌어오는지.
+4. 플레이어가 피스톤에 밀릴 때 이전과 다르게 덜컹거리지 않는지(서버 쪽 충돌이 새로 생겼으므로).
+5. 피스톤이 움직이는 도중 서버를 저장·재시작해도 블록이 사라지지 않는지.
 
 참고: `piston_extension.rs`의 "TODO: use player"는 바닐라에 해당하는 동작이 없습니다(`MovingPistonBlock.destroy`는 플레이어 없이 블록만 제거). 그대로 둡니다.
-
-9b의 주의점: 바닐라 `isHandlingTick`은 월드 틱의 예약 틱·블록 이벤트 구간에서만 참입니다. Pumpkin은 틱을 병렬로 돌리므로 같은 의미의 플래그를 어디에 둘지 먼저 정해야 합니다.
 
 ## 규칙 메모 (저장소 `AGENTS.md`, `CONTRIBUTING.md`)
 - 바닐라 동작은 디컴파일한 소스 기준으로 맞춘다. 위키나 기억 금지.

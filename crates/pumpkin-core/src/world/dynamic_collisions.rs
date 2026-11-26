@@ -1,8 +1,9 @@
-//! Space taken up by shulker box lids that are not closed.
+//! Collision that follows a block entity instead of the block state.
 //!
-//! Collision shapes come from the block state alone. A shulker box is the one block whose
-//! collision follows its block entity, so the part of an open lid that sticks out of the block is
-//! kept here and added on top of the static shapes.
+//! Collision shapes come from the block state alone. Two blocks are different: an open shulker
+//! box, whose lid sticks out of the block, and a block being moved by a piston, which is
+//! somewhere between two block positions. Their current boxes are kept here and added on top of
+//! the static shapes.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,18 +12,20 @@ use pumpkin_util::math::{boundingbox::BoundingBox, position::BlockPos};
 
 struct Lid {
     position: BlockPos,
+    /// The union of `boxes`, for a quick reject.
     bounds: BoundingBox,
+    boxes: Vec<BoundingBox>,
     updated: i64,
 }
 
 #[derive(Default)]
-pub struct ShulkerLids {
+pub struct DynamicCollisions {
     /// Mirrors `lids.len()` so collision checks skip the lock while every lid is closed.
     count: AtomicUsize,
     lids: Mutex<Vec<Lid>>,
 }
 
-impl ShulkerLids {
+impl DynamicCollisions {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.count.load(Ordering::Relaxed) == 0
@@ -30,17 +33,28 @@ impl ShulkerLids {
 
     /// Stores the space the lid of the shulker box at `position` covers outside its block.
     pub fn set(&self, position: BlockPos, bounds: BoundingBox, world_age: i64) {
+        self.set_boxes(position, vec![bounds], world_age);
+    }
+
+    /// Replaces the boxes of the block at `position`. No boxes removes the entry.
+    pub fn set_boxes(&self, position: BlockPos, boxes: Vec<BoundingBox>, world_age: i64) {
+        let Some(bounds) = boxes.iter().copied().reduce(|a, b| a.minmax(&b)) else {
+            self.remove(&position);
+            return;
+        };
         let mut lids = self
             .lids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(lid) = lids.iter_mut().find(|lid| lid.position == position) {
             lid.bounds = bounds;
+            lid.boxes = boxes;
             lid.updated = world_age;
         } else {
             lids.push(Lid {
                 position,
                 bounds,
+                boxes,
                 updated: world_age,
             });
             self.count.store(lids.len(), Ordering::Relaxed);
@@ -86,8 +100,13 @@ impl ShulkerLids {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for lid in lids.iter() {
-            if lid.bounds.intersects(bounding_box) {
-                on_lid(lid.position, lid.bounds);
+            if !lid.bounds.intersects(bounding_box) {
+                continue;
+            }
+            for bounds in &lid.boxes {
+                if bounds.intersects(bounding_box) {
+                    on_lid(lid.position, *bounds);
+                }
             }
         }
     }

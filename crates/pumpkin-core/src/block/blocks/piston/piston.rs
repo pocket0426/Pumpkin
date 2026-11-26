@@ -232,7 +232,7 @@ impl PistonBlock {
             .unwrap_or(BlockDirection::North)
             .to_facing();
 
-        world.add_block_entity(Arc::new(PistonBlockEntity {
+        let moving = Arc::new(PistonBlockEntity {
             position: *pos,
             facing: dir,
             pushed_block_state: BlockState::from_id(props.to_state_id(block)),
@@ -240,7 +240,10 @@ impl PistonBlock {
             last_progress: 0.0.into(),
             extending: false,
             source: true,
-        }));
+            last_ticked: std::sync::atomic::AtomicI64::new(i64::MIN),
+        });
+        moving.update_collision(world);
+        world.add_block_entity(moving);
 
         world.update_neighbors(pos, None);
         if sticky {
@@ -253,9 +256,9 @@ impl PistonBlock {
                 && piston.facing == dir
                 && piston.extending
             {
-                if piston.last_progress.load() < 0.5 {
-                    dropped = true;
-                }
+                // Vanilla `triggerEvent`: a block still on its way out is finished where it
+                // lands and left there, however far it got
+                dropped = true;
                 piston.finish(world);
             }
             if !dropped {
@@ -349,8 +352,16 @@ pub fn try_move(world: &Arc<World>, _block: &Block, block_pos: &BlockPos) {
                 let Some(piston) = entity.as_any().downcast_ref::<PistonBlockEntity>() else {
                     return;
                 };
-                if piston.extending && piston.current_progress.load() < 0.5
-                // TODO: more stuff...
+                // Vanilla also asks `isHandlingTick`, which says the event runs before the
+                // block finishes moving. Events here always run at the start of the next
+                // tick, and a block that is still moving then is left behind by the event
+                // itself, so the two remaining conditions decide the same cases.
+                if piston.extending
+                    && (piston.last_progress.load() < 0.5
+                        || piston
+                            .last_ticked
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                            == world.get_world_age())
                 {
                     // Piston reduced too quickly, if its a stick piston no blocks will be dragged
                     r#type = 2;
@@ -424,7 +435,7 @@ fn move_piston(
         );
 
         if let Some(moved_state) = moved_block_states.get(moved_blocks.len() - 1 - index) {
-            world.add_block_entity(Arc::new(PistonBlockEntity {
+            let moving = Arc::new(PistonBlockEntity {
                 position: target_pos,
                 facing: dir.to_facing().to_block_direction(),
                 pushed_block_state: moved_state,
@@ -432,7 +443,10 @@ fn move_piston(
                 last_progress: 0.0.into(),
                 extending: extend,
                 source: false,
-            }));
+                last_ticked: std::sync::atomic::AtomicI64::new(i64::MIN),
+            });
+            moving.update_collision(world);
+            world.add_block_entity(moving);
         }
         affected_block_states.push(block_state);
     }
@@ -455,7 +469,7 @@ fn move_piston(
         let mut props = PistonHeadLikeProperties::default(&Block::PISTON_HEAD);
         props.facing = dir.to_facing();
         props.r#type = pistion_type;
-        world.add_block_entity(Arc::new(PistonBlockEntity {
+        let moving = Arc::new(PistonBlockEntity {
             position: extended_pos,
             facing: dir.to_facing().to_block_direction(),
             pushed_block_state: BlockState::from_id(props.to_state_id(&Block::PISTON_HEAD)),
@@ -463,7 +477,10 @@ fn move_piston(
             last_progress: 0.0.into(),
             extending: true,
             source: true,
-        }));
+            last_ticked: std::sync::atomic::AtomicI64::new(i64::MIN),
+        });
+        moving.update_collision(world);
+        world.add_block_entity(moving);
     }
 
     let air_state = Block::AIR.default_state.id;
