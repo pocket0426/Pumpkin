@@ -120,8 +120,54 @@ impl CreeperEntity {
             radius * multiplier,
             crate::world::ExplosionInteraction::Mob,
         );
-        // TODO: spawn area effect cloud with potion effects
+        self.spawn_lingering_cloud();
         entity.remove();
+    }
+}
+
+impl CreeperEntity {
+    /// Vanilla `Creeper.spawnLingeringCloud`: a creeper under potion effects leaves them behind
+    /// as a cloud.
+    fn spawn_lingering_cloud(&self) {
+        let effects: Vec<_> = self
+            .mob_entity
+            .living_entity
+            .active_effects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .map(|effect| {
+                (
+                    effect.effect_type,
+                    effect.duration,
+                    effect.amplifier,
+                    effect.ambient,
+                    effect.show_particles,
+                    effect.show_icon,
+                )
+            })
+            .collect();
+        if effects.is_empty() {
+            return;
+        }
+        let entity = &self.mob_entity.living_entity.entity;
+        let world = entity.world.load_full();
+        let cloud = crate::entity::area_effect_cloud::AreaEffectCloudEntity::create(
+            Entity::new(
+                world.clone(),
+                entity.pos.load(),
+                &pumpkin_data::entity::EntityType::AREA_EFFECT_CLOUD,
+            ),
+            pumpkin_data::item_stack::ItemStack::EMPTY.clone(),
+            effects,
+            300,
+            2.5,
+            20,
+            10,
+            -0.5,
+            0,
+        );
+        world.spawn_entity(cloud);
     }
 }
 
@@ -313,5 +359,83 @@ impl CreeperEntity {
 
     pub fn set_explosion_radius(&self, radius: i32) {
         self.explosion_radius.store(radius, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::effect::StatusEffect;
+    use pumpkin_data::entity::EntityType;
+    use pumpkin_data::potion::Effect;
+    use pumpkin_util::math::vector3::Vector3;
+
+    use super::*;
+    use crate::entity::ai::test_support::world;
+    use crate::entity::area_effect_cloud::AreaEffectCloudEntity;
+    use crate::world::World;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Radius, duration and effects of every cloud in the world.
+    fn clouds(world: &Arc<World>) -> Vec<(f32, i32, Vec<&'static StatusEffect>)> {
+        world
+            .entities
+            .load()
+            .iter()
+            .filter_map(|entity| {
+                let cloud = entity.cast_any().downcast_ref::<AreaEffectCloudEntity>()?;
+                let radius = *cloud
+                    .radius
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let duration = *cloud
+                    .duration
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let effects = cloud
+                    .effects
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .iter()
+                    .map(|effect| effect.0)
+                    .collect();
+                Some((radius, duration, effects))
+            })
+            .collect()
+    }
+
+    fn creeper(world: &Arc<World>) -> Arc<CreeperEntity> {
+        CreeperEntity::new(Entity::new(
+            world.clone(),
+            Vector3::new(0.5, 64.0, 0.5),
+            &EntityType::CREEPER,
+        ))
+    }
+
+    #[tokio::test]
+    async fn creeper_under_an_effect_leaves_it_as_a_cloud() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let plain = creeper(&world);
+        plain.spawn_lingering_cloud();
+        let after_plain = clouds(&world);
+
+        let swift = creeper(&world);
+        swift.mob_entity.living_entity.add_effect(Effect {
+            effect_type: &StatusEffect::SPEED,
+            duration: 400,
+            amplifier: 0,
+            ambient: false,
+            show_particles: true,
+            show_icon: true,
+            blend: false,
+        });
+        swift.spawn_lingering_cloud();
+        let after_swift = clouds(&world);
+        world.level.shutdown().await;
+
+        assert_eq!(after_plain, vec![]);
+        assert_eq!(after_swift, vec![(2.5, 300, vec![&StatusEffect::SPEED])]);
+        Ok(())
     }
 }
