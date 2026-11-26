@@ -4,9 +4,15 @@ use std::sync::{Arc, Weak};
 use uuid::Uuid;
 
 use pumpkin_data::entity::EntityType;
+use pumpkin_data::game_event::GameEvent;
 use pumpkin_data::sound::Sound;
 use pumpkin_nbt::compound::NbtCompound;
+use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
+use rand::RngExt;
+
+use crate::entity::mob::spawn::{EntitySpawnReason, finalize_spawn};
+use crate::entity::mob::vex::VexEntity;
 
 use crate::entity::ai::behavior::fleeing::{self, Flee};
 use crate::entity::ai::behavior::hunting::{self, Hunt};
@@ -151,10 +157,19 @@ impl Mob for EvokerEntity {
         other: &dyn crate::entity::EntityBase,
         _brain: Option<&crate::entity::ai::brain::BrainState>,
     ) -> Option<bool> {
-        // Vanilla also counts its own vexes, which have no owner here yet.
-        Some(crate::entity::mob::raider::illager_considers_ally(
-            self, other,
-        ))
+        use crate::entity::mob::raider::illager_considers_ally;
+        if illager_considers_ally(self, other) {
+            return Some(true);
+        }
+        // Its own vexes, and those of anyone it already sides with.
+        let owner = other
+            .cast_any()
+            .downcast_ref::<VexEntity>()
+            .and_then(VexEntity::get_owner);
+        Some(owner.is_some_and(|owner| {
+            owner.get_entity().entity_id == self.get_entity().entity_id
+                || illager_considers_ally(self, owner.as_ref())
+        }))
     }
 
     fn as_patrolling_monster(&self) -> Option<&dyn PatrollingMonster> {
@@ -434,13 +449,19 @@ impl Goal for EvokerSummonSpellGoal {
             return false;
         }
 
-        // Count nearby Vexes
+        // Vanilla counts with `forNonCombat().range(16)`: living vexes within 16 blocks.
         let bb = entity.bounding_box.load().expand(16.0, 16.0, 16.0);
         let world = entity.world.load();
-        let nearby = world.get_entities_at_box(&bb);
-        let vex_count = nearby
+        let pos = entity.pos.load();
+        let vex_count = world
+            .get_entities_at_box(&bb)
             .iter()
-            .filter(|e| *e.get_entity().entity_type == EntityType::VEX)
+            .filter(|e| {
+                let other = e.get_entity();
+                *other.entity_type == EntityType::VEX
+                    && other.is_alive()
+                    && other.pos.load().squared_distance_to_vec(&pos) <= 16.0 * 16.0
+            })
             .count();
 
         let max_allowed = (rand::random::<u8>() % 8 + 1) as usize;
@@ -480,20 +501,38 @@ impl Goal for EvokerSummonSpellGoal {
             let evoker_ent = &evoker.mob_entity.living_entity.entity;
             evoker_ent.play_sound(Sound::EntityEvokerCastSpell);
 
-            let world = evoker_ent.world.load();
-            let evoker_pos = evoker_ent.pos.load();
-
+            let world = evoker_ent.world.load_full();
+            let origin = evoker_ent.block_pos.load();
+            let team = evoker.get_team_name();
+            let owner: Arc<dyn EntityBase> = evoker.clone();
+            let mut random = rand::rng();
             for _ in 0..3 {
-                let offset_x = (rand::random::<i32>() % 5 - 2) as f64;
-                let offset_z = (rand::random::<i32>() % 5 - 2) as f64;
-                let spawn_pos = Vector3::new(
-                    evoker_pos.x + offset_x,
-                    evoker_pos.y + 1.0,
-                    evoker_pos.z + offset_z,
+                let pos = BlockPos::new(
+                    origin.0.x + random.random_range(-2..=2),
+                    origin.0.y + 1,
+                    origin.0.z + random.random_range(-2..=2),
                 );
-
-                let vex = from_type(&EntityType::VEX, spawn_pos, &world, Uuid::new_v4());
-                world.spawn_entity(vex);
+                let entity = from_type(
+                    &EntityType::VEX,
+                    pos.to_f64() + Vector3::new(0.5, 0.0, 0.5),
+                    &world,
+                    Uuid::new_v4(),
+                );
+                finalize_spawn(&entity, &world, EntitySpawnReason::MobSummoned, None);
+                if let Some(vex) = entity.cast_any().downcast_ref::<VexEntity>() {
+                    vex.set_owner(&owner);
+                    vex.set_bound_origin(Some(pos));
+                    vex.set_limited_life(20 * (30 + random.random_range(0..90)));
+                }
+                if let Some(team) = &team {
+                    world
+                        .scoreboard
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .add_player_to_team(&*world, team, entity.get_scoreboard_name());
+                }
+                world.spawn_entity(entity);
+                world.emit_game_event(GameEvent::EntityPlace.name(), pos.to_f64());
             }
         }
     }

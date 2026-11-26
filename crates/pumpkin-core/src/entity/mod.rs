@@ -4956,7 +4956,9 @@ impl Entity {
 
     #[must_use]
     pub fn is_affected_by_blocks(&self) -> bool {
-        !self.is_removed() && !self.no_physics.load(Ordering::Relaxed)
+        // A vex ticks without physics and is still caught by fire, webs and the like.
+        !self.is_removed()
+            && (!self.no_physics.load(Ordering::Relaxed) || self.entity_type == &EntityType::VEX)
     }
 
     #[must_use]
