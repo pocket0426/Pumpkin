@@ -287,6 +287,10 @@ pub fn is_dead_or_dying(entity: &dyn EntityBase) -> bool {
 
 /// The `GlobalPos` of `pos` in `world`.
 #[must_use]
-pub fn global_pos_in(world: &World, pos: pumpkin_util::math::position::BlockPos) -> Option<GlobalPos> {
-    Dimension::from_name(world.dimension.minecraft_name).map(|dimension| GlobalPos::new(dimension, pos))
+pub fn global_pos_in(
+    world: &World,
+    pos: pumpkin_util::math::position::BlockPos,
+) -> Option<GlobalPos> {
+    Dimension::from_name(world.dimension.minecraft_name)
+        .map(|dimension| GlobalPos::new(dimension, pos))
 }

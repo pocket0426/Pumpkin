@@ -99,7 +99,9 @@ fn idle_look_behaviors() -> Box<dyn BehaviorControl> {
             1,
         ),
         (
-            Box::new(behavior::interact::set_entity_look_target::any(MAX_LOOK_DIST)),
+            Box::new(behavior::interact::set_entity_look_target::any(
+                MAX_LOOK_DIST,
+            )),
             1,
         ),
         (Box::new(behavior::DoNothing::new(30, 60)), 1),
@@ -109,7 +111,9 @@ fn idle_look_behaviors() -> Box<dyn BehaviorControl> {
 fn idle_movement_behaviors() -> Box<dyn BehaviorControl> {
     Box::new(behavior::run_one(vec![
         (
-            Box::new(behavior::random_stroll::stroll(SPEED_MULTIPLIER_WHEN_IDLING)),
+            Box::new(behavior::random_stroll::stroll(
+                SPEED_MULTIPLIER_WHEN_IDLING,
+            )),
             2,
         ),
         (
@@ -179,7 +183,10 @@ fn init_idle_activity() -> ActivityData {
             )),
             idle_look_behaviors(),
             idle_movement_behaviors(),
-            Box::new(behavior::interact::set_look_and_interact::create(&EntityType::PLAYER, 4)),
+            Box::new(behavior::interact::set_look_and_interact::create(
+                &EntityType::PLAYER,
+                4,
+            )),
         ],
     )
 }
@@ -189,10 +196,16 @@ fn init_fight_activity() -> ActivityData {
         Activity::Fight,
         10,
         vec![
-            Box::new(behavior::stop_attacking_if_target_invalid::create_with_condition(
-                |tick, target| !is_nearest_valid_attack_target(&tick.visibility(), target),
-            )),
-            Box::new(behavior::set_walk_target_from_attack_target_if_target_out_of_reach::create(|_| 1.0)),
+            Box::new(
+                behavior::stop_attacking_if_target_invalid::create_with_condition(
+                    |tick, target| !is_nearest_valid_attack_target(&tick.visibility(), target),
+                ),
+            ),
+            Box::new(
+                behavior::set_walk_target_from_attack_target_if_target_out_of_reach::create(|_| {
+                    1.0
+                }),
+            ),
             Box::new(behavior::melee_attack::create(MELEE_ATTACK_COOLDOWN)),
         ],
         types::ATTACK_TARGET.id(),

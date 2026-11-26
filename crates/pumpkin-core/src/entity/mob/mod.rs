@@ -3,9 +3,9 @@ use super::{
 };
 use crate::block::blocks::bubble_column::SURFACE_UPWARD_ACCELERATION;
 use crate::entity::ai::behavior::temperament::Temperament;
-use crate::entity::ai::brain::{Brain, BrainTick};
 use crate::entity::ai::brain::memory::PackedMemories;
 use crate::entity::ai::brain::memory::codec::{block_pos_from_tag, block_pos_to_tag};
+use crate::entity::ai::brain::{Brain, BrainTick};
 use crate::entity::ai::control::body_rotation_control::BodyRotationControl;
 use crate::entity::ai::control::jump_control::JumpControl;
 use crate::entity::ai::control::look_control::LookControl;
@@ -56,6 +56,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Weak};
 use uuid::Uuid;
 
+pub mod abstract_piglin;
 pub mod bat;
 pub mod blaze;
 pub mod breeze;
@@ -81,10 +82,9 @@ pub mod neutral;
 pub mod patrol;
 pub mod phantom;
 pub mod piglin;
-pub mod abstract_piglin;
 pub mod piglin_ai;
-pub mod piglin_brute_ai;
 pub mod piglin_brute;
+pub mod piglin_brute_ai;
 pub mod pillager;
 pub mod raider;
 pub mod ravager;
@@ -810,6 +810,10 @@ impl MobEntity {
     /// Queues a write to this mob's brain. Entities tick in parallel, so one mob never writes
     /// another's brain directly; the message runs at the start of the owner's next brain tick.
     pub fn post_to_brain(&self, message: BrainMessage) {
+        // Nothing drains the inbox of a mob without AI, so its mail is dropped, not hoarded.
+        if self.is_no_ai() {
+            return;
+        }
         self.brain_inbox
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

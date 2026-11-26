@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use pumpkin_data::Block;
+use pumpkin_data::BlockState;
 use pumpkin_data::Enchantment;
 use pumpkin_data::data_component_impl::EquipmentSlot;
 use pumpkin_data::entity::EntityType;
@@ -14,7 +15,6 @@ use pumpkin_data::tag::{self, Taggable};
 use pumpkin_data::tracked_data;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_nbt::tag::NbtTag;
-use pumpkin_util::math::boundingbox::EntityDimensions;
 use pumpkin_util::math::position::BlockPos;
 
 use crate::entity::item::ItemEntity;
@@ -23,7 +23,10 @@ use crate::entity::mob::{abstract_piglin, piglin_ai};
 use crate::entity::player::Player;
 use crate::entity::{
     Entity, EntityBase,
-    mob::{Mob, MobEntity, crossbow_attack_mob::CrossbowAttackMob, equipment::RegionalDifficulty},
+    mob::{
+        Mob, MobEntity, MobMetadata, crossbow_attack_mob::CrossbowAttackMob,
+        equipment::RegionalDifficulty,
+    },
 };
 use crate::world::World;
 
@@ -36,27 +39,14 @@ pub struct PiglinEntity {
     pub is_charging_crossbow: AtomicBool,
     pub is_dancing: AtomicBool,
     pub inventory: Mutex<Vec<ItemStack>>,
-    pub ambient_sound_time: AtomicI32,
 }
 
 impl PiglinEntity {
     pub const CONVERSION_TIME: i32 = 300;
     pub const INVENTORY_SIZE: usize = 8;
     pub const XP_REWARD: u32 = 5;
-    pub const AMBIENT_SOUND_INTERVAL: i32 = 80;
     /// `CrossbowItem.getDefaultProjectileRange`.
     const CROSSBOW_PROJECTILE_RANGE: i32 = 8;
-
-    pub const ADULT_DIMENSIONS: EntityDimensions = EntityDimensions {
-        width: 0.6,
-        height: 1.95,
-        eye_height: 1.79,
-    };
-    pub const BABY_DIMENSIONS: EntityDimensions = EntityDimensions {
-        width: 0.49,
-        height: 0.98,
-        eye_height: 0.78,
-    };
 
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
@@ -69,15 +59,16 @@ impl PiglinEntity {
             is_charging_crossbow: AtomicBool::new(false),
             is_dancing: AtomicBool::new(false),
             inventory: Mutex::new(Vec::new()),
-            ambient_sound_time: AtomicI32::new(0),
         };
         let mob_arc = Arc::new(piglin);
         mob_arc.mob_entity.set_can_pick_up_loot(true);
         // Vanilla does this in finalizeSpawn; a loaded mob rebuilds its brain after
-        mob_arc.mob_entity.with_brain_tick(mob_arc.as_ref(), |tick| {
-            let mut rng = tick.mob.get_random();
-            piglin_ai::init_memories(tick.state, &mut rng);
-        });
+        mob_arc
+            .mob_entity
+            .with_brain_tick(mob_arc.as_ref(), |tick| {
+                let mut rng = tick.mob.get_random();
+                piglin_ai::init_memories(tick.state, &mut rng);
+            });
         mob_arc
     }
 
@@ -113,14 +104,8 @@ impl PiglinEntity {
     }
 
     pub fn set_baby(&self, baby: bool) {
-        self.is_baby.store(baby, Ordering::Relaxed);
-        let entity = &self.mob_entity.living_entity.entity;
-        entity.set_synced_data(tracked_data::piglin::DATA_BABY_ID, baby);
-        if baby {
-            entity.entity_dimension.store(Self::BABY_DIMENSIONS);
-        } else {
-            entity.entity_dimension.store(Self::ADULT_DIMENSIONS);
-        }
+        self.mob_entity
+            .set_baby_flag(&self.is_baby, tracked_data::piglin::DATA_BABY_ID, baby);
     }
 
     #[must_use]
@@ -256,17 +241,6 @@ impl PiglinEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&EquipmentSlot::MAIN_HAND)
     }
-    #[must_use]
-    fn wants_item_entity(&self, item: &ItemEntity) -> bool {
-        let stack = item
-            .get_item_stack()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        !stack.is_empty()
-            && self
-                .mob_entity
-                .with_brain(self, |brain| self.wants_to_pick_up_in_brain(brain, &stack))
-    }
     pub fn make_sound(&self, sound: Sound) {
         let entity = &self.mob_entity.living_entity.entity;
         let base_pitch = if self.is_baby() { 1.5 } else { 1.0 };
@@ -280,98 +254,6 @@ impl PiglinEntity {
         );
     }
 
-    fn tick_ambient_sound(&self) {
-        let living = &self.mob_entity.living_entity;
-        let alive = living.entity.is_alive() && living.health.load() > 0.0;
-        if alive
-            && rand::random_range(0..1000) < self.ambient_sound_time.fetch_add(1, Ordering::Relaxed)
-        {
-            self.reset_ambient_sound_time();
-            let sound = self.mob_entity.with_brain_tick(self, |tick| {
-                let converting = self.is_converting(tick.world);
-                piglin_ai::get_sound_for_current_activity(&tick.visibility(), converting)
-            });
-            if let Some(sound) = sound {
-                self.make_sound(sound);
-            }
-        }
-    }
-
-    fn reset_ambient_sound_time(&self) {
-        self.ambient_sound_time
-            .store(-Self::AMBIENT_SOUND_INTERVAL, Ordering::Relaxed);
-    }
-    fn pick_up_nearby_items(&self) {
-        let living = &self.mob_entity.living_entity;
-        let entity = &living.entity;
-        if !self.mob_entity.can_pick_up_loot()
-            || !entity.is_alive()
-            || living.health.load() <= 0.0
-            || living.dead.load(Ordering::Relaxed)
-        {
-            return;
-        }
-        let world = entity.world.load();
-        if !world.level_info.load().game_rules.mob_griefing {
-            return;
-        }
-
-        let reach = entity.bounding_box.load().expand(1.0, 0.0, 1.0);
-        for candidate in world.get_entities_at_box(&reach) {
-            let Some(item) = candidate.get_item_entity() else {
-                continue;
-            };
-            if item.get_entity().is_alive()
-                && item.get_pickup_delay() == 0
-                && self.wants_item_entity(item)
-            {
-                self.pick_up_item(item);
-            }
-        }
-    }
-
-    fn pick_up_item(&self, item: &ItemEntity) {
-        let count = {
-            let stack = item
-                .get_item_stack()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // Nuggets are taken whole, everything else one at a time.
-            if stack.item.id == Item::GOLD_NUGGET.id {
-                stack.item_count
-            } else {
-                stack.item_count.min(1)
-            }
-        };
-        if count == 0
-            || !self
-                .mob_entity
-                .living_entity
-                .pickup(item.get_entity(), u32::from(count))
-        {
-            return;
-        }
-
-        let taken = item
-            .get_item_stack()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .split(count);
-        let emptied = item
-            .get_item_stack()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty();
-        if emptied {
-            item.get_entity().remove();
-        } else {
-            item.init_data_tracker();
-        }
-
-        self.mob_entity.with_brain_tick(self, |tick| {
-            piglin_ai::pick_up_item(tick, self, taken);
-        });
-    }
     pub fn drop_inventory(&self) {
         let items = std::mem::take(
             &mut *self
@@ -707,15 +589,64 @@ impl Mob for PiglinEntity {
         piglin_ai::wants_to_pickup(brain, self, stack)
     }
 
-    fn mob_tick(&self, _caller: &dyn EntityBase) {
-        if !crate::entity::ai::brain::behavior::utils::is_alive(self) {
+    /// Vanilla `Piglin.pickUpItem` into `PiglinAi.pickUpItem`: gold nuggets are taken as the
+    /// whole stack, everything else one at a time.
+    fn pick_up_item(&self, item: &ItemEntity) {
+        let planned = {
+            let stack = item
+                .get_item_stack()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if stack.item.id == Item::GOLD_NUGGET.id {
+                stack.item_count
+            } else {
+                stack.item_count.min(1)
+            }
+        };
+        let Some(taken) = self
+            .mob_entity
+            .living_entity
+            .pick_up_from(item, planned, |ground| ground.split(planned))
+        else {
             return;
-        }
-        self.tick_ambient_sound();
+        };
+        self.mob_entity.with_brain_tick(self, |tick| {
+            piglin_ai::pick_up_item(tick, self, taken);
+        });
     }
 
-    fn post_tick(&self) {
-        self.pick_up_nearby_items();
+    fn get_ambient_sound(&self) -> Option<Sound> {
+        self.mob_entity.with_brain_tick(self, |tick| {
+            let converting = self.is_converting(tick.world);
+            piglin_ai::get_sound_for_current_activity(&tick.visibility(), converting)
+        })
+    }
+
+    /// Vanilla `AbstractPiglin.playAmbientSound`: only while idle.
+    fn play_ambient_sound(&self) {
+        let sound = self.mob_entity.with_brain_tick(self, |tick| {
+            if !piglin_ai::is_idle(tick.state) {
+                return None;
+            }
+            let converting = self.is_converting(tick.world);
+            piglin_ai::get_sound_for_current_activity(&tick.visibility(), converting)
+        });
+        if let Some(sound) = sound {
+            Self::make_sound(self, sound);
+        }
+    }
+
+    fn mob_play_step_sound(&self, _pos: &BlockPos, _state: &BlockState) {
+        self.play_entity_sound(Sound::EntityPiglinStep, 0.15, 1.0);
+    }
+
+    fn mob_metadata(&self) -> Option<MobMetadata> {
+        self.is_baby().then(|| MobMetadata::new().baby(true))
+    }
+
+    fn spawn_as_baby(&self) -> bool {
+        self.set_baby(true);
+        true
     }
 
     fn on_damage(
@@ -723,7 +654,6 @@ impl Mob for PiglinEntity {
         _damage_type: pumpkin_data::damage::DamageType,
         source: Option<&dyn EntityBase>,
     ) {
-        self.reset_ambient_sound_time();
         if self.mob_entity.living_entity.dead.load(Ordering::Relaxed) {
             self.drop_inventory();
         }

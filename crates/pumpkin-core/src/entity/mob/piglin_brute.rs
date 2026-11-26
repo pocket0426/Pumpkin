@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use pumpkin_data::Block;
+use pumpkin_data::BlockState;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_data::tracked_data;
@@ -253,7 +254,29 @@ impl Mob for PiglinBruteEntity {
         }));
     }
 
-    fn get_base_experience_reward(&self) -> u32 {
+    fn wants_to_pick_up(&self, stack: &pumpkin_data::item_stack::ItemStack) -> bool {
+        stack.item.id == pumpkin_data::item::Item::GOLDEN_AXE.id && self.can_hold_item(stack)
+    }
+
+    fn mob_play_step_sound(&self, _pos: &BlockPos, _state: &BlockState) {
+        self.play_entity_sound(Sound::EntityPiglinBruteStep, 0.15, 1.0);
+    }
+
+    fn get_ambient_sound(&self) -> Option<Sound> {
+        Some(Sound::EntityPiglinBruteAmbient)
+    }
+
+    /// Vanilla `AbstractPiglin.playAmbientSound`: only while idle.
+    fn play_ambient_sound(&self) {
+        let idle = self.mob_entity.with_brain(self, |brain| {
+            brain.is_active(pumpkin_data::environment_attribute::Activity::Idle)
+        });
+        if idle && let Some(sound) = self.get_ambient_sound() {
+            self.make_sound(sound);
+        }
+    }
+
+    fn xp_reward(&self) -> u32 {
         Self::XP_REWARD
     }
 }

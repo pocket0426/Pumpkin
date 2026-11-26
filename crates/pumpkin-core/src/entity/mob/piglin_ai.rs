@@ -21,8 +21,8 @@ use crate::entity::ai::brain::behavior::{self, BehaviorControl};
 use crate::entity::ai::brain::memory::{MemoryStatus, types};
 use crate::entity::ai::brain::sensing::SensorType;
 use crate::entity::ai::brain::sensing::is_entity_attackable_ignoring_line_of_sight;
-use crate::entity::ai::brain::{BrainState, BrainTick, VisibilityContext};
 use crate::entity::ai::brain::{BrainProvider, memory::MemoryModuleId};
+use crate::entity::ai::brain::{BrainState, BrainTick, VisibilityContext};
 use crate::entity::ai::util::land_random_pos;
 use crate::entity::item::ItemEntity;
 use crate::entity::mob::hoglin::HoglinEntity;
@@ -154,8 +154,7 @@ pub fn is_adult_piglin(entity: &dyn EntityBase) -> bool {
 
 #[must_use]
 pub fn is_baby_hoglin(entity: &dyn EntityBase) -> bool {
-    as_hoglin(entity)
-        .is_some_and(|hoglin| hoglin.mob_entity.living_entity.is_baby())
+    as_hoglin(entity).is_some_and(|hoglin| hoglin.mob_entity.living_entity.is_baby())
 }
 
 #[must_use]
@@ -401,7 +400,11 @@ pub const PLAYER_ANGER_RANGE: f64 = 16.0;
 ///
 /// Each piglin judges and reacts on its own brain through its inbox, so this never locks a
 /// brain from the caller's thread.
-pub fn anger_nearby_piglins(world: &World, player: &Arc<Player>, only_if_they_see_the_player: bool) {
+pub fn anger_nearby_piglins(
+    world: &World,
+    player: &Arc<Player>,
+    only_if_they_see_the_player: bool,
+) {
     let area = player
         .get_entity()
         .bounding_box
@@ -1145,7 +1148,9 @@ fn look_behaviors() -> Vec<(Box<dyn BehaviorControl>, i32)> {
             1,
         ),
         (
-            Box::new(behavior::interact::set_entity_look_target::any(MAX_LOOK_DIST)),
+            Box::new(behavior::interact::set_entity_look_target::any(
+                MAX_LOOK_DIST,
+            )),
             1,
         ),
     ]
@@ -1160,7 +1165,9 @@ fn idle_look_behaviors() -> Box<dyn BehaviorControl> {
 fn idle_movement_behaviors() -> Box<dyn BehaviorControl> {
     Box::new(behavior::run_one(vec![
         (
-            Box::new(behavior::random_stroll::stroll(SPEED_MULTIPLIER_WHEN_IDLING)),
+            Box::new(behavior::random_stroll::stroll(
+                SPEED_MULTIPLIER_WHEN_IDLING,
+            )),
             2,
         ),
         (
@@ -1218,7 +1225,10 @@ fn avoid_zombified() -> Box<dyn BehaviorControl> {
 }
 
 fn baby_sometimes_ride_baby_hoglin() -> Box<dyn BehaviorControl> {
-    let mut ticker = behavior::set_entity_look_target_sometimes::Ticker::new(RIDE_START_INTERVAL.0, RIDE_START_INTERVAL.1);
+    let mut ticker = behavior::set_entity_look_target_sometimes::Ticker::new(
+        RIDE_START_INTERVAL.0,
+        RIDE_START_INTERVAL.1,
+    );
     Box::new(behavior::copy_memory_with_expiry::create(
         move |tick| {
             let is_baby = tick
@@ -1289,7 +1299,10 @@ fn init_idle_activity() -> ActivityData {
             baby_sometimes_ride_baby_hoglin(),
             idle_look_behaviors(),
             idle_movement_behaviors(),
-            Box::new(behavior::interact::set_look_and_interact::create(&EntityType::PLAYER, 4)),
+            Box::new(behavior::interact::set_look_and_interact::create(
+                &EntityType::PLAYER,
+                4,
+            )),
         ],
     )
 }
@@ -1327,9 +1340,11 @@ fn init_fight_activity() -> ActivityData {
         Activity::Fight,
         10,
         vec![
-            Box::new(behavior::stop_attacking_if_target_invalid::create_with_condition(
-                |tick, target| !is_nearest_valid_attack_target(&tick.visibility(), target),
-            )),
+            Box::new(
+                behavior::stop_attacking_if_target_invalid::create_with_condition(
+                    |tick, target| !is_nearest_valid_attack_target(&tick.visibility(), target),
+                ),
+            ),
             Box::new(behavior::one_shot::sequence(
                 "TriggerIfHasCrossbow",
                 |tick| has_crossbow(tick.mob),
@@ -1338,9 +1353,15 @@ fn init_fight_activity() -> ActivityData {
                     SPEED_WHEN_STRAFING_BACK_FROM_TARGET,
                 ),
             )),
-            Box::new(behavior::set_walk_target_from_attack_target_if_target_out_of_reach::create(|_| 1.0)),
+            Box::new(
+                behavior::set_walk_target_from_attack_target_if_target_out_of_reach::create(|_| {
+                    1.0
+                }),
+            ),
             Box::new(behavior::melee_attack::create(MELEE_ATTACK_COOLDOWN)),
-            Box::new(behavior::Timed::new(behavior::crossbow_attack::CrossbowAttack::new())),
+            Box::new(behavior::Timed::new(
+                behavior::crossbow_attack::CrossbowAttack::new(),
+            )),
             Box::new(remember_if_hoglin_was_killed()),
             Box::new(behavior::erase_memory_if::create(
                 |tick| is_near_zombified(&tick.visibility()),
@@ -1397,7 +1418,11 @@ fn init_celebrate_activity() -> ActivityData {
                     1,
                 ),
                 (
-                    Box::new(behavior::random_stroll::stroll_with_distance(SPEED_MULTIPLIER_WHEN_IDLING, 2, 1)),
+                    Box::new(behavior::random_stroll::stroll_with_distance(
+                        SPEED_MULTIPLIER_WHEN_IDLING,
+                        2,
+                        1,
+                    )),
                     1,
                 ),
                 (Box::new(behavior::DoNothing::new(10, 20)), 1),
@@ -1444,10 +1469,12 @@ fn init_ride_hoglin_activity() -> ActivityData {
                 |tick| tick.mob.is_passenger(),
                 behavior::one_shot::trigger_one_shuffled("RideLookAround", ride_look_triggers()),
             )),
-            Box::new(behavior::dismount_or_skip_mounting::dismount_or_skip_mounting(
-                MAX_WALK_DISTANCE_TO_START_RIDING,
-                wants_to_stop_riding,
-            )),
+            Box::new(
+                behavior::dismount_or_skip_mounting::dismount_or_skip_mounting(
+                    MAX_WALK_DISTANCE_TO_START_RIDING,
+                    wants_to_stop_riding,
+                ),
+            ),
         ],
         types::RIDE_TARGET.id(),
     )
@@ -1456,7 +1483,8 @@ fn init_ride_hoglin_activity() -> ActivityData {
 fn ride_look_triggers() -> Vec<(behavior::Trigger, i32)> {
     let mut triggers: Vec<(behavior::Trigger, i32)> = Vec::new();
     for entity_type in [&EntityType::PLAYER, &EntityType::PIGLIN] {
-        let mut look = behavior::interact::set_entity_look_target::for_type(entity_type, MAX_LOOK_DIST);
+        let mut look =
+            behavior::interact::set_entity_look_target::for_type(entity_type, MAX_LOOK_DIST);
         triggers.push((
             Box::new(move |tick| behavior::BehaviorControl::try_start(&mut look, tick)),
             1,

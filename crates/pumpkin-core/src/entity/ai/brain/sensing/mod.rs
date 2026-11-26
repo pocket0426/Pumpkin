@@ -133,9 +133,7 @@ impl SensorType {
                 Box::new(armadillo_scare_detected::ArmadilloScareDetectedSensor)
             }
             Self::PiglinSpecific => Box::new(piglin_specific::PiglinSpecificSensor),
-            Self::PiglinBruteSpecific => {
-                Box::new(piglin_brute_specific::PiglinBruteSpecificSensor)
-            }
+            Self::PiglinBruteSpecific => Box::new(piglin_brute_specific::PiglinBruteSpecificSensor),
         }
     }
 

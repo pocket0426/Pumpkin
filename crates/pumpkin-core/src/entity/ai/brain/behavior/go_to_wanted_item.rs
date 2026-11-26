@@ -1,14 +1,19 @@
 use std::sync::Arc;
 
+use super::super::BrainTick;
 use super::super::memory::{
     MemoryStatus, position_tracker::EntityTracker, types, walk_target::WalkTarget,
 };
-use super::super::BrainTick;
 use super::{OneShot, utils};
 
 #[must_use]
 pub fn create(speed_modifier: f32, interrupt_ongoing_walk: bool, max_dist_to_walk: i32) -> OneShot {
-    create_with(|_| true, speed_modifier, interrupt_ongoing_walk, max_dist_to_walk)
+    create_with(
+        |_| true,
+        speed_modifier,
+        interrupt_ongoing_walk,
+        max_dist_to_walk,
+    )
 }
 
 #[must_use]
