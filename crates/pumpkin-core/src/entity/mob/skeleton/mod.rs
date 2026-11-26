@@ -68,8 +68,10 @@ impl SkeletonEntityBase {
             // TODO: RestrictSunGoal(2) and FleeSunGoal(3), once both match vanilla.
             fleeing::apply(goal_selector, SKELETON_FLEES);
             // Vanilla `reassessWeaponGoal`: the bow or the melee goal at 4, by the held weapon.
-            // TODO: attack interval per type and difficulty (vanilla 40, 20 on hard; bogged and parched 70, 50 on hard).
-            goal_selector.add_goal(4, Box::new(BowAttackGoal::new(1.0, 20, 15.0)));
+            goal_selector.add_goal(
+                4,
+                Box::new(BowAttackGoal::new(1.0, 20, 15.0).with_mob_interval()),
+            );
             goal_selector.add_goal(
                 4,
                 Box::new(
@@ -155,5 +157,108 @@ impl Mob for SkeletonEntityBase {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         equipment.put(&EquipmentSlot::MAIN_HAND, ItemStack::new(1, &Item::BOW));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::effect::StatusEffect;
+    use pumpkin_data::potion::Effect;
+    use pumpkin_util::math::vector3::Vector3;
+
+    use super::bogged::BoggedSkeletonEntity;
+    use super::parched::ParchedSkeletonEntity;
+    use super::stray::StraySkeletonEntity;
+    use super::*;
+    use crate::entity::ai::test_support::world;
+    use crate::entity::projectile::arrow::ArrowEntity;
+    use crate::item::potion::PotionContents;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// The effects an arrow shot by `mob` carries, as (effect, duration).
+    fn arrow_effects(world: &Arc<World>, mob: &dyn Mob) -> Vec<(&'static StatusEffect, i32)> {
+        let arrow = ArrowEntity::new(
+            Entity::new(
+                world.clone(),
+                Vector3::new(0.0, 64.0, 0.0),
+                &EntityType::ARROW,
+            ),
+            Some(mob.get_entity()),
+        );
+        let arrow = mob.get_arrow(arrow);
+        let stack = arrow
+            .item_stack
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        PotionContents::read_potion_effects(&stack)
+            .into_iter()
+            .map(|(effect, duration, ..)| (effect, duration))
+            .collect()
+    }
+
+    fn entity(world: &Arc<World>, entity_type: &'static EntityType) -> Entity {
+        Entity::new(world.clone(), Vector3::new(0.0, 64.0, 0.0), entity_type)
+    }
+
+    #[tokio::test]
+    async fn each_skeleton_kind_tips_its_arrows_and_keeps_its_pace() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let skeleton = SkeletonEntityBase::new(entity(&world, &EntityType::SKELETON));
+        let stray = StraySkeletonEntity::new(entity(&world, &EntityType::STRAY));
+        let bogged = BoggedSkeletonEntity::new(entity(&world, &EntityType::BOGGED));
+        let parched = ParchedSkeletonEntity::new(entity(&world, &EntityType::PARCHED));
+
+        let plain = arrow_effects(&world, &*skeleton);
+        let slowing = arrow_effects(&world, &*stray);
+        let poisoning = arrow_effects(&world, &*bogged);
+        let weakening = arrow_effects(&world, &*parched);
+        let pace = |mob: &dyn Mob| {
+            (
+                mob.bow_attack_interval(false),
+                mob.bow_attack_interval(true),
+            )
+        };
+        let paces = [
+            pace(&*skeleton),
+            pace(&*stray),
+            pace(&*bogged),
+            pace(&*parched),
+        ];
+        world.level.shutdown().await;
+
+        assert_eq!(plain, vec![]);
+        assert_eq!(slowing, vec![(&StatusEffect::SLOWNESS, 600)]);
+        assert_eq!(poisoning, vec![(&StatusEffect::POISON, 100)]);
+        assert_eq!(weakening, vec![(&StatusEffect::WEAKNESS, 600)]);
+        assert_eq!(paces, [(40, 20), (40, 20), (70, 50), (70, 50)]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parched_shrugs_off_weakness_only() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let parched = ParchedSkeletonEntity::new(entity(&world, &EntityType::PARCHED));
+        let living = &parched.get_mob_entity().living_entity;
+        let effect = |effect_type| Effect {
+            effect_type,
+            duration: 200,
+            amplifier: 0,
+            ambient: false,
+            show_particles: true,
+            show_icon: true,
+            blend: false,
+        };
+        living.add_effect(effect(&StatusEffect::WEAKNESS));
+        living.add_effect(effect(&StatusEffect::SLOWNESS));
+        let weak = living.has_effect(&StatusEffect::WEAKNESS);
+        let slow = living.has_effect(&StatusEffect::SLOWNESS);
+        world.level.shutdown().await;
+
+        assert!(!weak);
+        assert!(slow);
+        Ok(())
     }
 }

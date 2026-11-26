@@ -2364,6 +2364,12 @@ pub trait Mob: EntityBase + Send + Sync {
         false
     }
 
+    /// Vanilla `AbstractSkeleton.getAttackInterval` and `getHardAttackInterval`: ticks between
+    /// two bow shots.
+    fn bow_attack_interval(&self, hard: bool) -> i32 {
+        if hard { 20 } else { 40 }
+    }
+
     // getArrow in vanilla, lets skeletons change the arrow before it's shot
     fn get_arrow(&self, arrow: ArrowEntity) -> ArrowEntity {
         arrow

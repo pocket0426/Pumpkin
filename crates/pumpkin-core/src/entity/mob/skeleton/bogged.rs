@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pumpkin_data::BlockState;
+use pumpkin_data::effect::StatusEffect;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
@@ -11,6 +12,7 @@ use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 
+use crate::entity::projectile::arrow::ArrowEntity;
 use crate::entity::{
     Entity, EntityBase,
     custom_sound::CustomSound,
@@ -97,6 +99,16 @@ impl Mob for BoggedSkeletonEntity {
 
     fn as_custom_sound(&self) -> Option<&dyn CustomSound> {
         Some(self)
+    }
+
+    /// Vanilla `Bogged.getArrow`.
+    fn get_arrow(&self, arrow: ArrowEntity) -> ArrowEntity {
+        arrow.add_effect(&StatusEffect::POISON, 100);
+        arrow
+    }
+
+    fn bow_attack_interval(&self, hard: bool) -> i32 {
+        if hard { 50 } else { 70 }
     }
 
     fn get_mob_entity(&self) -> &MobEntity {

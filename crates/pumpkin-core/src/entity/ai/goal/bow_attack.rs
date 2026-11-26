@@ -20,6 +20,8 @@ pub struct BowAttackGoal {
     goal_control: Controls,
     speed: f64,
     attack_interval: i32,
+    /// Ask the mob for the interval instead, which depends on its kind and the difficulty.
+    interval_from_mob: bool,
     squared_range: f64,
     attack_time: i32,
     see_time: i32,
@@ -42,6 +44,7 @@ impl BowAttackGoal {
             goal_control: Controls::MOVE | Controls::LOOK,
             speed,
             attack_interval,
+            interval_from_mob: false,
             squared_range: f64::from(range * range),
             attack_time: -1,
             see_time: 0,
@@ -75,6 +78,23 @@ impl BowAttackGoal {
             self.drawing = false;
             self.draw_ticks = 0;
         }
+    }
+
+    /// For skeletons: vanilla `reassessWeaponGoal` sets the interval from the skeleton's kind and
+    /// the difficulty.
+    #[must_use]
+    pub const fn with_mob_interval(mut self) -> Self {
+        self.interval_from_mob = true;
+        self
+    }
+
+    fn interval(&self, mob: &dyn Mob) -> i32 {
+        if !self.interval_from_mob {
+            return self.attack_interval;
+        }
+        let hard = mob.get_entity().world.load().level_info.load().difficulty
+            == pumpkin_util::Difficulty::Hard;
+        mob.bow_attack_interval(hard)
     }
 
     /// Spawns the arrow, matching vanilla `AbstractSkeleton::performRangedAttack`.
@@ -247,7 +267,7 @@ impl Goal for BowAttackGoal {
                 if self.draw_ticks >= Self::DRAW_TIME {
                     self.stop_drawing(mob);
                     Self::shoot(mob, &target);
-                    self.attack_time = self.attack_interval;
+                    self.attack_time = self.interval(mob);
                 }
             }
         } else {

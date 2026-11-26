@@ -203,29 +203,91 @@ impl ArmorStandEntity {
         self.rotation.store(packed.to_owned());
     }
 
-    fn break_and_drop_items(&self) {
+    /// Vanilla `ArmorStand.kill`: gone, with the death game event.
+    fn kill_stand(&self) {
         let entity = self.get_entity();
-        //let name = entity.custom_name.unwrap_or(entity.get_name());
-
-        //TODO: i am stupid! let armor_stand_item = ItemStack::new_with_component(1, &Item::ARMOR_STAND, vec![(DataComponent::CustomName, self.get_custom_name())]);
-        let armor_stand_item = ItemStack::new(1, &Item::ARMOR_STAND);
-        entity
-            .world
-            .load()
-            .drop_stack(&entity.block_pos.load(), armor_stand_item);
-
-        Self::on_break(entity);
+        entity.remove();
+        entity.world.load().emit_game_event(
+            pumpkin_data::game_event::GameEvent::EntityDie.name(),
+            entity.pos.load(),
+        );
     }
 
-    fn on_break(entity: &Entity) {
-        let world = entity.world.load();
-        world.play_sound(
+    fn play_broken_sound(&self) {
+        let entity = self.get_entity();
+        entity.world.load().play_sound(
             Sound::EntityArmorStandBreak,
             SoundCategory::Neutral,
             &entity.pos.load(),
         );
+    }
 
-        // TODO: Implement equipment slots and make them drop all of their stored items.
+    /// Vanilla `brokenByPlayer`: the stand drops as an item that keeps its name, then
+    /// everything it wore.
+    fn broken_by_player(&self) {
+        let entity = self.get_entity();
+        let mut stand = ItemStack::new(1, &Item::ARMOR_STAND);
+        if let Some(name) = entity.custom_name.load().as_ref() {
+            stand.set_data_component(pumpkin_data::data_component_impl::CustomNameImpl {
+                name: name.clone(),
+            });
+        }
+        entity
+            .world
+            .load_full()
+            .drop_stack(&entity.block_pos.load(), stand);
+        self.broken_by_anything();
+    }
+
+    /// Vanilla `brokenByAnything`: the break sound, and what it wore drops a block higher.
+    /// An item with the curse of vanishing is lost.
+    fn broken_by_anything(&self) {
+        const SLOTS: [EquipmentSlot; 8] = [
+            EquipmentSlot::MAIN_HAND,
+            EquipmentSlot::OFF_HAND,
+            EquipmentSlot::FEET,
+            EquipmentSlot::LEGS,
+            EquipmentSlot::CHEST,
+            EquipmentSlot::HEAD,
+            EquipmentSlot::BODY,
+            EquipmentSlot::SADDLE,
+        ];
+        self.play_broken_sound();
+        let worn: Vec<ItemStack> = {
+            let mut equipment = self
+                .living_entity
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            SLOTS
+                .iter()
+                .map(|slot| equipment.put(slot, ItemStack::EMPTY.clone()))
+                .collect()
+        };
+        let entity = self.get_entity();
+        let world = entity.world.load_full();
+        let above = entity.block_pos.load().up();
+        for item in worn {
+            if !item.is_empty() && !crate::entity::living::prevents_equipment_drop(&item) {
+                world.drop_stack(&above, item);
+            }
+        }
+    }
+
+    /// Vanilla `causeDamage`: fire wears the stand down until it falls apart.
+    fn cause_damage(&self, amount: f32) {
+        let health = self.living_entity.health.load() - amount;
+        if health <= 0.5 {
+            self.broken_by_anything();
+            self.kill_stand();
+        } else {
+            self.living_entity.set_health(health);
+            let entity = self.get_entity();
+            entity.world.load().emit_game_event(
+                pumpkin_data::game_event::GameEvent::EntityDamage.name(),
+                entity.pos.load(),
+            );
+        }
     }
 
     /// Spawns break particles at the armor stand's position.
@@ -337,8 +399,7 @@ impl EntityBase for ArmorStandEntity {
     }
 
     fn kill(&self, _caller: &dyn EntityBase) {
-        self.get_entity().remove();
-        // TODO: emit GameEvent::ENTITY_DIE
+        self.kill_stand();
     }
 
     fn damage_with_context(
@@ -368,7 +429,7 @@ impl EntityBase for ArmorStandEntity {
         }
 
         if damage_type.has_tag(&tag::DamageType::MINECRAFT_BYPASSES_INVULNERABILITY) {
-            entity.remove();
+            self.kill_stand();
             return false;
         }
 
@@ -378,13 +439,26 @@ impl EntityBase for ArmorStandEntity {
         }
 
         if damage_type.has_tag(&tag::DamageType::MINECRAFT_IS_EXPLOSION) {
-            Self::on_break(entity);
-            entity.remove();
+            self.broken_by_anything();
+            self.kill_stand();
             return false;
         }
 
-        // TODO: IGNITES_ARMOR_STANDS (in_fire, campfire) - set on fire
-        // TODO: BURNS_ARMOR_STANDS (on_fire) - reduce health
+        // Standing in fire lights the stand, and once alight it is worn down
+        if damage_type.has_tag(&tag::DamageType::MINECRAFT_IGNITES_ARMOR_STANDS) {
+            if entity.is_on_fire() {
+                self.cause_damage(0.15);
+            } else {
+                self.set_on_fire_for(5.0);
+            }
+            return false;
+        }
+        if damage_type.has_tag(&tag::DamageType::MINECRAFT_BURNS_ARMOR_STANDS)
+            && self.living_entity.health.load() > 0.5
+        {
+            self.cause_damage(4.0);
+            return false;
+        }
 
         let can_break = damage_type.has_tag(&tag::DamageType::MINECRAFT_CAN_BREAK_ARMOR_STAND);
         let always_kills =
@@ -405,8 +479,9 @@ impl EntityBase for ArmorStandEntity {
             {
                 return false;
             } else if player.is_creative() {
+                self.play_broken_sound();
                 Self::spawn_break_particles(entity);
-                entity.remove();
+                self.kill_stand();
                 return true;
             }
         }
@@ -424,16 +499,15 @@ impl EntityBase for ArmorStandEntity {
                 SoundCategory::Neutral,
                 &entity.block_pos.load().to_f64(),
             );
+            world.emit_game_event(
+                pumpkin_data::game_event::GameEvent::EntityDamage.name(),
+                entity.pos.load(),
+            );
             self.last_hit_time.store(time, Ordering::Relaxed);
         } else {
+            self.broken_by_player();
             Self::spawn_break_particles(entity);
-            world.play_sound(
-                Sound::EntityArmorStandBreak,
-                SoundCategory::Neutral,
-                &entity.block_pos.load().to_f64(),
-            );
-            self.break_and_drop_items();
-            entity.remove();
+            self.kill_stand();
         }
 
         true
@@ -457,4 +531,122 @@ pub enum ArmorStandFlags {
     HideBasePlate = 8,
     /// Marker Flag
     Marker = 16,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use pumpkin_data::data_component_impl::CustomNameImpl;
+    use pumpkin_util::text::TextComponent;
+
+    use super::*;
+    use crate::entity::ai::test_support::world;
+    use crate::world::World;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn stand(world: &Arc<World>) -> Arc<ArmorStandEntity> {
+        Arc::new(ArmorStandEntity::new(Entity::new(
+            world.clone(),
+            Vector3::new(0.5, 64.0, 0.5),
+            &EntityType::ARMOR_STAND,
+        )))
+    }
+
+    fn hurt(stand: &Arc<ArmorStandEntity>, damage_type: DamageType) -> bool {
+        stand.damage_with_context(stand.as_ref(), 1.0, damage_type, None, None, None)
+    }
+
+    /// The item stacks lying in the world.
+    fn dropped(world: &Arc<World>) -> Vec<ItemStack> {
+        world
+            .entities
+            .load()
+            .iter()
+            .filter_map(|entity| entity.get_item_entity())
+            .map(|item| {
+                item.get_item_stack()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn broken_stand_drops_itself_with_its_name_and_what_it_wore() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let stand = stand(&world);
+        stand
+            .get_entity()
+            .custom_name
+            .store(Arc::new(Some(TextComponent::text("Keeper"))));
+        stand
+            .living_entity
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .put(
+                &EquipmentSlot::HEAD,
+                ItemStack::new(1, &Item::DIAMOND_HELMET),
+            );
+
+        let hit = hurt(&stand, DamageType::PLAYER_ATTACK);
+        let removed = stand.get_entity().is_removed();
+        let dropped = dropped(&world);
+        world.level.shutdown().await;
+
+        let stand_item = dropped
+            .iter()
+            .find(|stack| stack.item.id == Item::ARMOR_STAND.id);
+        assert!(hit);
+        assert!(removed);
+        assert_eq!(dropped.len(), 2);
+        assert!(
+            stand_item
+                .is_some_and(|stack| { stack.get_data_component::<CustomNameImpl>().is_some() })
+        );
+        assert!(
+            dropped
+                .iter()
+                .any(|stack| stack.item.id == Item::DIAMOND_HELMET.id)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fire_lights_the_stand_then_wears_it_down() -> TestResult {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let stand = stand(&world);
+        let health = || stand.living_entity.health.load();
+        let full = health();
+
+        hurt(&stand, DamageType::IN_FIRE);
+        let alight = stand.get_entity().is_on_fire();
+        let after_lighting = health();
+        hurt(&stand, DamageType::IN_FIRE);
+        let after_standing_in_fire = health();
+        hurt(&stand, DamageType::ON_FIRE);
+        let after_burning = health();
+        let mut burns = 1;
+        while !stand.get_entity().is_removed() && burns < 20 {
+            hurt(&stand, DamageType::ON_FIRE);
+            burns += 1;
+        }
+        let dropped = dropped(&world);
+        world.level.shutdown().await;
+
+        assert!(alight);
+        assert!((after_lighting - full).abs() < f32::EPSILON);
+        assert!((after_standing_in_fire - (full - 0.15)).abs() < 1.0e-4);
+        assert!((after_burning - (full - 4.15)).abs() < 1.0e-4);
+        // 20 health: 0.15 from the fire, then five burns of 4 bring it to 0.5 or less
+        assert_eq!(burns, 5);
+        // Burnt down, the stand itself is lost
+        assert!(dropped.is_empty());
+        Ok(())
+    }
 }

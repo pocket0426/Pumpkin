@@ -716,6 +716,42 @@ impl ArrowEntity {
         }
     }
 
+    /// Vanilla `Arrow.addEffect`: one more effect for whoever the arrow hurts, kept with the
+    /// arrow's potion contents.
+    pub fn add_effect(&self, effect: &'static pumpkin_data::effect::StatusEffect, duration: i32) {
+        use pumpkin_data::data_component::DataComponent;
+        use pumpkin_data::data_component_impl::{
+            DataComponentImpl, PotionContentsImpl, StatusEffectInstance,
+        };
+        let mut item_stack = self
+            .item_stack
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut contents = item_stack
+            .get_data_component::<PotionContentsImpl>()
+            .cloned()
+            .unwrap_or(PotionContentsImpl {
+                potion_id: None,
+                custom_color: None,
+                custom_effects: Vec::new(),
+                custom_name: None,
+            });
+        contents.custom_effects.push(StatusEffectInstance {
+            effect_id: std::borrow::Cow::Borrowed(effect.minecraft_name),
+            amplifier: 0,
+            duration,
+            ambient: false,
+            show_particles: true,
+            show_icon: true,
+        });
+        item_stack
+            .patch
+            .retain(|(component, _)| *component != DataComponent::PotionContents);
+        item_stack
+            .patch
+            .push((DataComponent::PotionContents, Some(contents.to_dyn())));
+    }
+
     /// Effects for a target the arrow hurt: the tipped potion, or glowing from a spectral arrow.
     fn do_post_hurt_effects(&self, living: &LivingEntity) {
         let item_stack = self
