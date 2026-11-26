@@ -20,10 +20,25 @@ use crate::entity::{
         tempt::TemptGoal, wander_around::WanderAroundGoal,
     },
     item_steerable::{ItemBasedSteering, ItemSteerable},
-    mob::{Mob, MobEntity, equipment::equip_on_target},
+    mob::{
+        Mob, MobEntity,
+        equipment::equip_on_target,
+        spawn::{EntitySpawnReason, SpawnGroupData, finalize_spawn},
+    },
     passive::animal::Animal,
     player::Player,
+    r#type::from_type,
 };
+use crate::world::World;
+use rand::RngExt;
+use uuid::Uuid;
+
+/// One strider in this many spawns with a zombified piglin on its back.
+const PIGLIN_JOCKEY_ODDS: i32 = 30;
+/// Of the rest, one in this many carries a baby strider.
+const BABY_JOCKEY_ODDS: i32 = 10;
+/// Vanilla `Zombie.getSpawnAsBabyOdds`.
+const ZOMBIE_BABY_ODDS: f32 = 0.05;
 
 pub struct StriderEntity {
     pub mob_entity: MobEntity,
@@ -93,8 +108,6 @@ impl AgeableMob for StriderEntity {
         &self.ageable_data
     }
 
-    // TODO: vanilla `Strider.finalizeSpawn` jockeys: 1/30 a zombified piglin rider (if monsters
-    // spawn), else 1/10 a baby strider rider; both drop the group's baby chance to 0.
     fn default_baby_spawn_chance(&self) -> f32 {
         crate::entity::ageable::STRIDER_BABY_SPAWN_CHANCE
     }
@@ -106,7 +119,81 @@ impl Animal for StriderEntity {
     }
 }
 
+impl StriderEntity {
+    /// Vanilla `Strider.spawnJockey`: the rider is finalized on the strider's spot and
+    /// enters the world mounted, and the group stops rolling babies.
+    fn spawn_jockey(
+        &self,
+        world: &Arc<World>,
+        rider: Arc<dyn EntityBase>,
+        rider_group: Option<SpawnGroupData>,
+    ) -> SpawnGroupData {
+        rider
+            .get_entity()
+            .set_rotation(self.get_entity().yaw.load(), 0.0);
+        finalize_spawn(&rider, world, EntitySpawnReason::Jockey, rider_group);
+        self.mob_entity.add_pending_rider(rider);
+        SpawnGroupData::Ageable {
+            group_size: 0,
+            should_spawn_baby: true,
+            baby_spawn_chance: 0.0,
+        }
+    }
+}
+
 impl Mob for StriderEntity {
+    /// Vanilla `Strider.finalizeSpawn`: 1 in 30 carries a zombified piglin (where monsters
+    /// spawn), otherwise 1 in 10 a baby strider. Every strider starts its group over, so
+    /// the only naturally spawned babies are those riders.
+    fn finalize_spawn(
+        &self,
+        world: &Arc<World>,
+        _reason: EntitySpawnReason,
+        group_data: Option<SpawnGroupData>,
+    ) -> Option<SpawnGroupData> {
+        if self.is_baby() {
+            return self.default_finalize_spawn(world, group_data);
+        }
+        let mut random = self.get_random();
+        let pos = self.get_entity().pos.load();
+        let group =
+            if random.random_range(0..PIGLIN_JOCKEY_ODDS) == 0 && world.should_spawn_monsters() {
+                let rider = from_type(&EntityType::ZOMBIFIED_PIGLIN, pos, world, Uuid::new_v4());
+                let group = self.spawn_jockey(
+                    world,
+                    rider.clone(),
+                    Some(SpawnGroupData::Zombie {
+                        is_baby: random.random::<f32>() < ZOMBIE_BABY_ODDS,
+                        can_spawn_jockey: false,
+                    }),
+                );
+                if let Some(rider) = rider.get_mob() {
+                    rider.get_mob_entity().set_item_slot(
+                        &EquipmentSlot::MAIN_HAND,
+                        ItemStack::new(1, &Item::WARPED_FUNGUS_ON_A_STICK),
+                    );
+                }
+                self.mob_entity.set_item_slot_and_drop_when_killed(
+                    &EquipmentSlot::SADDLE,
+                    ItemStack::new(1, &Item::SADDLE),
+                );
+                group
+            } else if random.random_range(0..BABY_JOCKEY_ODDS) == 0 {
+                let rider = from_type(&EntityType::STRIDER, pos, world, Uuid::new_v4());
+                if let Some(baby) = rider.get_mob().and_then(Mob::as_ageable) {
+                    baby.set_baby(true);
+                }
+                self.spawn_jockey(world, rider, None)
+            } else {
+                SpawnGroupData::Ageable {
+                    group_size: 0,
+                    should_spawn_baby: true,
+                    baby_spawn_chance: crate::entity::ageable::STRIDER_BABY_SPAWN_CHANCE,
+                }
+            };
+        self.default_finalize_spawn(world, Some(group))
+    }
+
     fn can_dispenser_equip_into_slot(&self, slot: &EquipmentSlot) -> bool {
         *slot == EquipmentSlot::SADDLE || self.mob_entity.can_pick_up_loot()
     }
@@ -212,5 +299,81 @@ impl ItemSteerable for StriderEntity {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_util::math::vector3::Vector3;
+
+    use super::*;
+    use crate::entity::ai::test_support::world;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[tokio::test]
+    async fn natural_striders_are_adults_and_some_carry_a_rider() -> TestResult {
+        const SPAWNS: usize = 1500;
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let monsters = world.should_spawn_monsters();
+        let mut piglin_riders = 0;
+        let mut baby_riders = 0;
+        let mut broken_rules = Vec::new();
+        let mut group = None;
+        for _ in 0..SPAWNS {
+            let strider = StriderEntity::new(Entity::new(
+                world.clone(),
+                Vector3::new(0.5, 64.0, 0.5),
+                &EntityType::STRIDER,
+            ));
+            group = strider.finalize_spawn(&world, EntitySpawnReason::Natural, group);
+            let riders = strider.mob_entity.take_pending_riders();
+            let saddled = strider.is_saddled();
+            if strider.is_baby() {
+                broken_rules.push("a strider spawned as a baby on its own");
+            }
+            match riders.as_slice() {
+                [] if saddled => broken_rules.push("saddled without a rider"),
+                [] => {}
+                [rider] if rider.get_entity().entity_type == &EntityType::ZOMBIFIED_PIGLIN => {
+                    piglin_riders += 1;
+                    let holds_stick = rider.get_living_entity().is_some_and(|living| {
+                        living
+                            .entity_equipment
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .get(&EquipmentSlot::MAIN_HAND)
+                            .item
+                            == &Item::WARPED_FUNGUS_ON_A_STICK
+                    });
+                    if !holds_stick || !saddled {
+                        broken_rules.push("piglin rider without its stick or the saddle");
+                    }
+                }
+                [rider] if rider.get_entity().entity_type == &EntityType::STRIDER => {
+                    baby_riders += 1;
+                    let is_baby = rider
+                        .get_mob()
+                        .and_then(Mob::as_ageable)
+                        .is_some_and(AgeableMob::is_baby);
+                    if !is_baby || saddled {
+                        broken_rules.push("strider rider that is no baby, or a saddle for it");
+                    }
+                }
+                _ => broken_rules.push("unexpected riders"),
+            }
+        }
+        world.level.shutdown().await;
+
+        assert_eq!(broken_rules, Vec::<&str>::new());
+        // 1 in 30 and (29 in 30) x (1 in 10) of 1500: about 50 and 145.
+        if monsters {
+            assert!((20..=95).contains(&piglin_riders), "{piglin_riders}");
+        } else {
+            assert_eq!(piglin_riders, 0);
+        }
+        assert!((90..=210).contains(&baby_riders), "{baby_riders}");
+        Ok(())
     }
 }
