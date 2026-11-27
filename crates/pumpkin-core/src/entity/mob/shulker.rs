@@ -16,14 +16,18 @@ use pumpkin_util::math::vector3::Vector3;
 use rand::RngExt;
 
 use crate::entity::ai::behavior::hunting::{self, Hunt};
+use crate::entity::ai::goal::active_target::ActiveTargetGoal;
 use crate::entity::ai::goal::look_around::RandomLookAroundGoal;
 use crate::entity::ai::goal::look_at_entity::LookAtEntityGoal;
 use crate::entity::ai::goal::revenge::RevengeGoal;
-use crate::entity::ai::goal::{Controls, Goal};
+use crate::entity::ai::goal::{Controls, Goal, GoalReach};
 use crate::entity::ai::target_match::TargetMatch;
+use crate::entity::living::LivingEntity;
 use crate::entity::mob::{Mob, MobEntity};
 use crate::entity::projectile::shulker_bullet::ShulkerBulletEntity;
 use crate::entity::{Entity, EntityBase};
+use crate::world::World;
+use pumpkin_data::attributes::Attributes;
 
 const DEFAULT_ATTACH_FACE: BlockDirection = BlockDirection::Down;
 const NO_COLOR: u8 = 16;
@@ -52,6 +56,81 @@ impl BlockDirectionExt for BlockDirection {
 }
 
 const SHULKER_HUNTS: &[Hunt] = &[Hunt::new(2, TargetMatch::Type(&EntityType::PLAYER), true)];
+
+/// How far the defense search reaches along the axis the shulker is attached on.
+const DEFENSE_SEARCH_DEPTH: f64 = 4.0;
+
+/// Vanilla `getTargetSearchArea`: the follow range sideways, 4 blocks along the attach axis.
+fn defense_area(
+    bounds: BoundingBox,
+    attach_face: BlockDirection,
+    follow_range: f64,
+) -> BoundingBox {
+    match attach_face {
+        BlockDirection::East | BlockDirection::West => {
+            bounds.expand(DEFENSE_SEARCH_DEPTH, follow_range, follow_range)
+        }
+        BlockDirection::North | BlockDirection::South => {
+            bounds.expand(follow_range, follow_range, DEFENSE_SEARCH_DEPTH)
+        }
+        BlockDirection::Up | BlockDirection::Down => {
+            bounds.expand(follow_range, DEFENSE_SEARCH_DEPTH, follow_range)
+        }
+    }
+}
+
+fn in_defense_area(mob: &dyn Mob, target: &LivingEntity, _world: &World) -> bool {
+    let Some(shulker) = mob.cast_any().downcast_ref::<ShulkerEntity>() else {
+        return false;
+    };
+    let living = &shulker.mob_entity.living_entity;
+    defense_area(
+        living.entity.bounding_box.load(),
+        shulker.get_attach_face(),
+        living.get_attribute_value(&Attributes::FOLLOW_RANGE),
+    )
+    .intersects(&target.entity.bounding_box.load())
+}
+
+/// Vanilla `ShulkerDefenseAttackGoal`: a shulker on a team goes for the monsters around
+/// it. The team is only asked for when the search starts.
+struct ShulkerDefenseAttackGoal {
+    search: ActiveTargetGoal,
+}
+
+impl Goal for ShulkerDefenseAttackGoal {
+    fn can_start(&mut self, mob: &dyn Mob) -> bool {
+        mob.get_team_name().is_some() && self.search.can_start(mob)
+    }
+
+    fn should_continue(&mut self, mob: &dyn Mob) -> bool {
+        self.search.should_continue(mob)
+    }
+
+    fn start(&mut self, mob: &dyn Mob) {
+        self.search.start(mob);
+    }
+
+    fn stop(&mut self, mob: &dyn Mob) {
+        self.search.stop(mob);
+    }
+
+    fn tick(&mut self, mob: &dyn Mob) {
+        self.search.tick(mob);
+    }
+
+    fn should_run_every_tick(&self) -> bool {
+        self.search.should_run_every_tick()
+    }
+
+    fn controls(&self) -> Controls {
+        self.search.controls()
+    }
+
+    fn tick_reach(&self, mob: &dyn Mob, running: bool) -> Option<GoalReach> {
+        self.search.tick_reach(mob, running)
+    }
+}
 
 pub struct ShulkerEntity {
     pub mob_entity: MobEntity,
@@ -126,8 +205,24 @@ impl ShulkerEntity {
                         .alerting_others(),
                 ),
             );
+            // Vanilla `ShulkerNearestAttackGoal` also flattens its search box, but players
+            // are found by distance there, so only the defense goal below is affected.
             hunting::apply(target_selector, &mob_arc.mob_entity, SHULKER_HUNTS);
-            // TODO: search box flattened to 4 along the attach face; ShulkerDefenseAttackGoal at 3.
+            target_selector.add_goal(
+                3,
+                Box::new(ShulkerDefenseAttackGoal {
+                    search: *Box::new(ActiveTargetGoal::new(
+                        &mob_arc.mob_entity,
+                        TargetMatch::Enemy,
+                        10,
+                        true,
+                        false,
+                        None::<fn(&LivingEntity, &World) -> bool>,
+                    ))
+                    .every(10)
+                    .selecting(in_defense_area),
+                }),
+            );
         };
 
         mob_arc
@@ -572,7 +667,97 @@ impl BlockPosExt for BlockPos {
 
 #[cfg(test)]
 mod tests {
-    use super::ShulkerEntity;
+    use std::sync::Arc;
+
+    use pumpkin_data::entity::EntityType;
+    use pumpkin_util::math::boundingbox::BoundingBox;
+    use pumpkin_util::text::TextComponent;
+    use pumpkin_util::text::color::NamedColor;
+
+    use super::{ShulkerEntity, defense_area};
+    use crate::entity::ai::goal::goal_selector::GoalSelector;
+    use crate::entity::ai::test_support::world;
+    use crate::entity::r#type::from_type;
+    use crate::entity::{Entity, EntityBase};
+    use crate::world::scoreboard::{CollisionRule, NameTagVisibility, Team};
+
+    #[test]
+    fn defense_area_is_shallow_along_the_attach_axis() {
+        let unit = BoundingBox::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 1.0));
+        let size = |face| {
+            let area = defense_area(unit, face, 16.0);
+            [
+                area.max.x - area.min.x,
+                area.max.y - area.min.y,
+                area.max.z - area.min.z,
+            ]
+        };
+        assert_eq!(size(BlockDirection::Down), [33.0, 9.0, 33.0]);
+        assert_eq!(size(BlockDirection::Up), [33.0, 9.0, 33.0]);
+        assert_eq!(size(BlockDirection::East), [9.0, 33.0, 33.0]);
+        assert_eq!(size(BlockDirection::North), [33.0, 33.0, 9.0]);
+    }
+
+    fn join_team(world: &Arc<crate::world::World>, shulker: &ShulkerEntity) {
+        let mut scoreboard = world
+            .scoreboard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        scoreboard.add_team(
+            &**world,
+            Team {
+                name: "guards".to_string(),
+                display_name: TextComponent::text("guards"),
+                options: 0,
+                nametag_visibility: NameTagVisibility::Always,
+                collision_rule: CollisionRule::Always,
+                color: NamedColor::White,
+                player_prefix: TextComponent::text(""),
+                player_suffix: TextComponent::text(""),
+                players: Vec::new(),
+            },
+        );
+        scoreboard.add_player_to_team(&**world, "guards", shulker.get_scoreboard_name());
+    }
+
+    #[tokio::test]
+    async fn shulker_on_a_team_goes_for_monsters_in_its_shallow_area()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let spawn = |entity_type, pos| {
+            let entity = from_type(entity_type, pos, &world, uuid::Uuid::new_v4());
+            world.spawn_entity(entity.clone());
+            entity
+        };
+        // Attached to the floor: 4 blocks up and down, the follow range sideways.
+        spawn(&EntityType::ZOMBIE, Vector3::new(0.5, 70.0, 0.5));
+        spawn(&EntityType::COW, Vector3::new(2.5, 64.0, 0.5));
+        let zombie = spawn(&EntityType::ZOMBIE, Vector3::new(6.5, 64.0, 0.5));
+        let guard = ShulkerEntity::new(Entity::new(
+            world.clone(),
+            Vector3::new(0.5, 64.0, 0.5),
+            &EntityType::SHULKER,
+        ));
+        let target_of = |guard: &Arc<ShulkerEntity>| {
+            for _ in 0..200 {
+                GoalSelector::tick(&guard.mob_entity.target_selector, &**guard);
+            }
+            guard
+                .mob_entity
+                .get_target()
+                .map(|target| target.get_entity().entity_id)
+        };
+        let teamless = target_of(&guard);
+        join_team(&world, &guard);
+        let on_a_team = target_of(&guard);
+        world.level.shutdown().await;
+
+        assert_eq!(teamless, None);
+        assert_eq!(on_a_team, Some(zombie.get_entity().entity_id));
+        Ok(())
+    }
+
     use pumpkin_data::BlockDirection;
     use pumpkin_util::math::vector3::Vector3;
 
