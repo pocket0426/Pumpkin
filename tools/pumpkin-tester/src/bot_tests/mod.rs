@@ -74,6 +74,7 @@ pub async fn run_bot_tests(
     spawner_data::run_spawner_data_test(server, summary_lines)?;
     piglin_anger::run_piglin_anger_test(server, summary_lines)?;
     vex_charge::run_vex_charge_test(server, summary_lines)?;
+    xp_orb_merge::run_xp_orb_merge_test(server, summary_lines)?;
 
     polar_bear::run_polar_bear_defense_test(server, &bot1, summary_lines)?;
 
@@ -93,3 +94,4 @@ pub async fn run_bot_tests(
 }
 mod allay;
 mod vex_charge;
+mod xp_orb_merge;
