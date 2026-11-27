@@ -1,3 +1,4 @@
+use pumpkin_data::tag::Taggable as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -172,23 +173,19 @@ impl SlimeEntity {
             return MobEntity::check_mob_spawn_rules(entity_type, world, pos, reason);
         }
 
-        // Swamp/Surface Spawning
-        // TODO: fix
-        // let biome = world.get_biome(pos);
-        // if biome.has_tag(&pumpkin_data::tag::WorldgenBiome::MINECRAFT_ALLOWS_SURFACE_SLIME_SPAWNS)
-        //     && pos.0.y > 50
-        //     && pos.0.y < 70
-        // {
-        //     let time = world.level_time.lock().await.time_of_day;
-        //     let moon_phase = (time / 24000) % 8;
-        //     let surface_slime_spawn_chance = Self::get_spawn_chance(moon_phase);
-        //     let mut rng = rand::rng();
-        //     if rng.random::<f32>() < surface_slime_spawn_chance
-        //         && world.get_max_local_raw_brightness(pos) <= rng.random_range(0..8)
-        //     {
-        //         return true;
-        //     }
-        // }
+        // Swamps and the like: on the surface, by the moon and in the dark.
+        if world
+            .get_biome(pos)
+            .has_tag(&pumpkin_data::tag::WorldgenBiome::MINECRAFT_ALLOWS_SURFACE_SLIME_SPAWNS)
+            && Self::is_surface_spawn_height(pos.0.y)
+        {
+            let mut rng = rand::rng();
+            if rng.random::<f32>() < world.surface_slime_spawn_chance(pos)
+                && i32::from(world.get_max_local_raw_brightness(pos)) <= rng.random_range(0..8)
+            {
+                return MobEntity::check_mob_spawn_rules(entity_type, world, pos, reason);
+            }
+        }
 
         // Slime Chunk Spawning
         let chunk_pos = pos.chunk_position();
@@ -209,15 +206,10 @@ impl SlimeEntity {
         false
     }
 
-    // const fn get_spawn_chance(moon_phase: i64) -> f32 {
-    //     match moon_phase {
-    //         0 => 1.0,
-    //         1 | 7 => 0.75,
-    //         2 | 6 => 0.5,
-    //         3 | 5 => 0.25,
-    //         _ => 0.0,
-    //     }
-    // }
+    /// Vanilla surface slimes spawn strictly between y 50 and 70.
+    const fn is_surface_spawn_height(y: i32) -> bool {
+        y > 50 && y < 70
+    }
 }
 
 impl CubeMob for SlimeEntity {
@@ -432,6 +424,14 @@ impl Goal for SlimeAttackGoal {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn surface_slimes_spawn_between_y_50_and_70_exclusive() {
+        let allowed: Vec<i32> = (48..=72)
+            .filter(|y| super::SlimeEntity::is_surface_spawn_height(*y))
+            .collect();
+        assert_eq!(allowed, (51..=69).collect::<Vec<_>>());
+    }
+
     use super::*;
     use crate::entity::ai::test_support::world;
 
