@@ -185,6 +185,17 @@ impl NeutralMob for WolfEntity {
     fn get_neutral_data(&self) -> &NeutralData {
         &self.neutral_data
     }
+
+    /// Wolves show their anger: the client draws the angry face from this value.
+    fn set_anger_end_time(&self, end_time: i64) {
+        self.neutral_data
+            .anger_end_time
+            .store(end_time, Ordering::Relaxed);
+        self.get_entity().set_synced_data(
+            pumpkin_data::tracked_data::wolf::DATA_ANGER_END_TIME,
+            end_time,
+        );
+    }
 }
 
 impl Mob for WolfEntity {
@@ -358,6 +369,10 @@ impl Mob for WolfEntity {
             entity.set_synced_data(pumpkin_data::tracked_data::wolf::BABY_ID, true);
         }
         entity.set_synced_data(
+            pumpkin_data::tracked_data::wolf::DATA_ANGER_END_TIME,
+            self.get_anger_end_time(),
+        );
+        entity.set_synced_data(
             pumpkin_data::tracked_data::wolf::TAMEABLE_FLAGS,
             self.get_tame_flags(),
         );
@@ -491,5 +506,40 @@ impl WolfEntity {
             pumpkin_data::tracked_data::wolf::DATA_SOUND_VARIANT_ID,
             VarInt(i32::from(raw_id)),
         );
+    }
+}
+
+#[cfg(test)]
+mod anger_sync_tests {
+    use pumpkin_util::math::vector3::Vector3;
+
+    use super::*;
+    use crate::entity::ai::test_support::world;
+
+    #[tokio::test]
+    async fn anger_end_time_reaches_the_synced_data() -> Result<(), Box<dyn std::error::Error>> {
+        let folder = tempfile::tempdir()?;
+        let world = world(&folder);
+        let wolf = WolfEntity::new(Entity::new(
+            world.clone(),
+            Vector3::new(0.5, 64.0, 0.5),
+            &EntityType::WOLF,
+        ));
+        wolf.set_anger_end_time(500);
+        // Setting the value it already holds changes nothing.
+        let already_synced = !wolf.get_entity().set_synced_data(
+            pumpkin_data::tracked_data::wolf::DATA_ANGER_END_TIME,
+            500i64,
+        );
+        wolf.stop_being_angry();
+        let cleared = !wolf.get_entity().set_synced_data(
+            pumpkin_data::tracked_data::wolf::DATA_ANGER_END_TIME,
+            wolf.get_anger_end_time(),
+        );
+        world.level.shutdown().await;
+
+        assert!(already_synced);
+        assert!(cleared);
+        Ok(())
     }
 }

@@ -125,7 +125,7 @@ pub trait NeutralMob: Mob {
         self.get_neutral_data()
             .anger_end_time
             .store(end_time, Relaxed);
-        // TODO: sync DATA_ANGER_END_TIME so the client shows the angry pose.
+        // Bees and wolves override this to sync it: only they show anger on the client.
     }
 
     fn set_time_to_remain_angry(&self, ticks: i32) {
