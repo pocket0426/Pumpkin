@@ -17,7 +17,7 @@ use crate::entity::{
         swim::SwimGoal, wander_around::WanderAroundGoal,
     },
     living::LivingEntity,
-    mob::{Mob, MobEntity, MobMetadata, hoglin::throw_target},
+    mob::{Mob, MobEntity, MobMetadata, hoglin::hurt_and_throw_target},
 };
 use crate::world::World;
 
@@ -160,11 +160,23 @@ impl Mob for ZoglinEntity {
         self.set_baby(nbt.get_bool("IsBaby").unwrap_or(false));
     }
 
-    fn on_attack(&self, target: &dyn EntityBase) {
-        // Vanilla HoglinBase.hurtAndThrowTarget: babies don't throw.
-        if self.is_baby() {
-            return;
+    /// Vanilla `Zoglin.doHurtTarget`.
+    fn do_hurt_target(&self, target: &dyn EntityBase) -> bool {
+        if target.get_living_entity().is_none() {
+            return false;
         }
-        throw_target(&self.mob_entity.living_entity.entity, target);
+        let entity = self.get_entity();
+        entity.world.load().send_entity_status(
+            entity,
+            pumpkin_data::entity::EntityStatus::StartAttacking,
+            pumpkin_protocol::bedrock::server::ActorEventID::None,
+        );
+        self.make_sound(pumpkin_data::sound::Sound::EntityZoglinAttack);
+        hurt_and_throw_target(
+            &self.mob_entity.living_entity,
+            self,
+            target,
+            !self.is_baby(),
+        )
     }
 }

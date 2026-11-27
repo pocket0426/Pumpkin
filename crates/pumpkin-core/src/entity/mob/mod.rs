@@ -75,6 +75,7 @@ pub mod ghast;
 pub mod giant;
 pub mod guardian;
 pub mod hoglin;
+pub mod hoglin_ai;
 pub mod illusioner;
 pub mod magma_cube;
 pub mod metadata;

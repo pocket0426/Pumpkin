@@ -61,6 +61,10 @@ pub fn run_vex_charge_test(
     let mut was_inside_stone = false;
     let mut closest = f64::MAX;
     for _ in 0..400 {
+        // A vex inside stone cannot see, and its own target goals let go of what they
+        // cannot see: the target is held for it, the test is about the flight.
+        let target: Arc<dyn EntityBase> = player.clone();
+        vex.mob_entity.set_target(Some(target));
         server.tick();
         charged |= vex.is_charging();
         let vex_entity = vex.get_entity();
@@ -90,7 +94,10 @@ pub fn run_vex_charge_test(
     }
     if !charged || !was_inside_stone || closest >= 1.0 || !no_gravity {
         return Err(format!(
-            "Vex above a stone ceiling: charged={charged}, passed through stone={was_inside_stone}, no gravity={no_gravity} (all expected true), closest to the player's eyes={closest:.2} (expected under 1); vex ended at {vex_pos:?}, player at {origin:?}"
+            "Vex above a stone ceiling: charged={charged}, passed through stone={was_inside_stone}, no gravity={no_gravity} (all expected true), closest to the player's eyes={closest:.2} (expected under 1); vex ended at {vex_pos:?}, player block at {origin:?}, player now at {:?}, vex velocity {:?}, vex target set={}",
+            player.get_entity().pos.load(),
+            vex.get_entity().velocity.load(),
+            vex.mob_entity.get_target().is_some()
         ));
     }
 

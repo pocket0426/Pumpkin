@@ -271,13 +271,23 @@ async fn run_range_buffer_case(
     if !player.can_interact_with_block_at(&pos, 4.0) {
         return Err("range buffer case started outside the edit buffer".to_string());
     }
+    // The out-of-range case before this one sent the bot a hundred blocks away and back,
+    // and an update into a chunk that is still coming back is dropped without a word.
+    for _ in 0..MAX_POLL_TICKS {
+        if world.level.is_chunk_loaded(&pos.chunk_position()) {
+            break;
+        }
+        tick(server, 1).await;
+    }
     set_editor(world, pos, Some(player.gameprofile.id));
     send_update(bot, pos, "BUFFER").await?;
     tick(server, 20).await;
     if stored_text(world, pos) != "BUFFER" {
         return Err(format!(
-            "SIGN_UPDATE inside the edit buffer was rejected (player at {:?})",
-            player.get_entity().pos.load()
+            "SIGN_UPDATE inside the edit buffer was rejected (player at {:?}, sign chunk loaded: {}, sign there: {})",
+            player.get_entity().pos.load(),
+            world.level.is_chunk_loaded(&pos.chunk_position()),
+            world.get_block_entity(&pos).is_some()
         ));
     }
 
@@ -565,6 +575,21 @@ pub async fn run_sign_authorization_tests(
         bot.position.y.floor() as i32,
         bot.position.z.floor() as i32,
     );
+
+    // The bot joins right after the other bots left and their chunks were unloaded. A sign
+    // update in a chunk that is still loading is dropped without a word, so wait for the
+    // chunks the cases place signs in.
+    let sign_chunks = [(0, 0), (8, 0), (-8, 0), (0, 8), (0, -8)]
+        .map(|(dx, dz)| base.offset(Vector3::new(dx, 0, dz)).chunk_position());
+    for _ in 0..MAX_POLL_TICKS {
+        if sign_chunks
+            .iter()
+            .all(|chunk| world.level.is_chunk_loaded(chunk))
+        {
+            break;
+        }
+        tick(server, 1).await;
+    }
 
     run_authorization_cases(server, &world, &mut bot, &player, base).await?;
     run_click_command_cases(server, &world, &mut bot, &player, base).await?;

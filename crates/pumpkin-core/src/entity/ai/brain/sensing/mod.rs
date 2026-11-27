@@ -12,6 +12,7 @@ pub mod axolotl_attackables;
 pub mod dummy;
 pub mod frog_attackables;
 pub mod golem;
+pub mod hoglin_specific;
 pub mod hurt_by;
 pub mod is_in_water;
 pub mod nearest_bed;
@@ -58,6 +59,7 @@ pub enum SensorType {
     ArmadilloScareDetected,
     PiglinSpecific,
     PiglinBruteSpecific,
+    HoglinSpecific,
 }
 
 impl SensorType {
@@ -83,6 +85,7 @@ impl SensorType {
             Self::ArmadilloScareDetected => "minecraft:armadillo_scare_detected",
             Self::PiglinSpecific => "minecraft:piglin_specific_sensor",
             Self::PiglinBruteSpecific => "minecraft:piglin_brute_specific_sensor",
+            Self::HoglinSpecific => "minecraft:hoglin_specific_sensor",
         }
     }
 
@@ -104,7 +107,8 @@ impl SensorType {
             | Self::VillagerHostiles
             | Self::AxolotlAttackables
             | Self::PiglinSpecific
-            | Self::PiglinBruteSpecific => DEFAULT_SCAN_RATE,
+            | Self::PiglinBruteSpecific
+            | Self::HoglinSpecific => DEFAULT_SCAN_RATE,
             Self::ArmadilloScareDetected => 5,
             Self::SecondaryPois => 40,
             Self::GolemDetected => 200,
@@ -134,6 +138,7 @@ impl SensorType {
             }
             Self::PiglinSpecific => Box::new(piglin_specific::PiglinSpecificSensor),
             Self::PiglinBruteSpecific => Box::new(piglin_brute_specific::PiglinBruteSpecificSensor),
+            Self::HoglinSpecific => Box::new(hoglin_specific::HoglinSpecificSensor),
         }
     }
 

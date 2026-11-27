@@ -75,6 +75,7 @@ pub async fn run_bot_tests(
     piglin_anger::run_piglin_anger_test(server, summary_lines)?;
     vex_charge::run_vex_charge_test(server, summary_lines)?;
     xp_orb_merge::run_xp_orb_merge_test(server, summary_lines)?;
+    hoglin_brain::run_hoglin_brain_test(server, summary_lines)?;
 
     polar_bear::run_polar_bear_defense_test(server, &bot1, summary_lines)?;
 
@@ -93,5 +94,6 @@ pub async fn run_bot_tests(
     Ok(())
 }
 mod allay;
+mod hoglin_brain;
 mod vex_charge;
 mod xp_orb_merge;

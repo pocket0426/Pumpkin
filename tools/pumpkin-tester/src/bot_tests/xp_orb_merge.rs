@@ -6,6 +6,7 @@ use pumpkin_core::{
     world::World,
 };
 use pumpkin_data::{dimension::Dimension, entity::EntityType};
+use pumpkin_util::GameMode;
 use pumpkin_util::math::{boundingbox::BoundingBox, vector3::Vector3};
 
 const DROPS: u32 = 120;
@@ -43,7 +44,17 @@ pub fn run_xp_orb_merge_test(
     let player = world
         .get_player_by_name("TestBot1")
         .ok_or("Could not find TestBot1 for the experience orb test")?;
-    // Out of the 8 block pull of both bots, in a chunk they keep loaded.
+    // Players pull orbs in from 8 blocks and pick them up, and where the second bot stands
+    // is not known: both watch as spectators, which orbs ignore.
+    let watchers: Vec<_> = world
+        .players
+        .load()
+        .iter()
+        .map(|watcher| (watcher.clone(), watcher.gamemode.load()))
+        .collect();
+    for (watcher, _) in &watchers {
+        watcher.set_gamemode(GameMode::Spectator);
+    }
     let center = player.get_entity().pos.load().add_raw(14.0, 6.0, 0.0);
     let (before, _, _) = orbs_near(&world, center);
     if before != 0 {
@@ -62,6 +73,9 @@ pub fn run_xp_orb_merge_test(
     let (settled_count, settled_total, orbs) = orbs_near(&world, center);
     for orb in orbs {
         orb.get_entity().remove();
+    }
+    for (watcher, gamemode) in watchers {
+        watcher.set_gamemode(gamemode);
     }
 
     let expected_total = DROPS * VALUE;
